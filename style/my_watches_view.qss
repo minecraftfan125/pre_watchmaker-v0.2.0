@@ -1,0 +1,83 @@
+/* my_watches_view.qss - My Watches 視圖樣式 */
+
+QWidget#myWatchesContainer {
+    background-color: #1e1e1e;
+}
+
+QLabel#myWatchesTitle {
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: bold;
+    padding: 5px 0px;
+}
+
+QScrollArea#myWatchesScroll {
+    background-color: #1e1e1e;
+    border: none;
+}
+
+QWidget#watchesGridWidget {
+    background-color: #1e1e1e;
+}
+
+QFrame#card {
+    background-color: #3d3d3d;
+    border: 2px solid #4d4d4d;
+    border-radius: 8px;
+}
+
+QFrame#card:hover {
+    background-color: #404040;
+    border: 1px solid #dddddd;
+}
+
+QFrame#watchCard {
+    background-color: #3d3d3d;
+    border: 2px solid #4d4d4d;
+    border-radius: 8px;
+}
+
+QFrame#watchCard:hover {
+    background-color: #404040;
+    border: 1px solid #dddddd;
+}
+
+QLabel#watchImage {
+    background-color: #252525;
+    border-radius: 4px;
+}
+
+QLabel#watchName {
+    color: #ffffff;
+    font-size: 16px;
+    background-color: transparent;
+}
+
+QFrame#addWatchCard {
+    background-color: #3d3d3d;
+    border: 2px solid #4d4d4d;
+    border-radius: 8px;
+}
+
+QFrame#addWatchCard:hover {
+    background-color: #404040;
+    border: 1px solid #dddddd;
+}
+
+QLabel#addWatchImage {
+    background-color: transparent;
+    border-radius: 4px;
+}
+
+QLabel#addWatchName {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: bold;
+    background-color: transparent;
+}
+
+QLabel#addWatchText {
+    color: #ffffff;
+    font-size: 14px;
+    background-color: transparent;
+}

@@ -1,0 +1,133 @@
+/* edit_view.qss - 編輯視圖樣式 */
+
+/* Exploror 樣式 (QTreeWidget) */
+Exploror {
+    background-color: #2d2d2d;
+    color: #ffffff;
+    border: none;
+    border-right: 2px solid #3d3d3d;
+    font-size: 13px;
+    outline: none;
+}
+
+Exploror::item {
+    padding: 5px;
+    border: none;
+}
+
+Exploror::item:hover {
+    background-color: #3d3d3d;
+}
+
+Exploror::item:selected {
+    background-color: #0078D4;
+    color: #ffffff;
+}
+
+Exploror::branch {
+    background-color: #2d2d2d;
+}
+
+Exploror::branch:hover {
+    background-color: #3d3d3d;
+}
+
+/* WatchPreview 樣式 */
+WatchPreview {
+    background-color: #1e1e1e;
+}
+
+/* ComponentPanel 樣式 */
+ComponentPanel {
+    background-color: #2d2d2d;
+    border: none;
+}
+QWidget#componentsContent{
+    background-color: #2d2d2d;
+    border: none;
+}
+
+/* AttributePanal 樣式 */
+AttributePanal {
+    background-color: #2d2d2d;
+    border: none;
+}
+
+/* AttributeContainer 樣式 */
+QLabel#attrLabel {
+    color: #cccccc;
+    font-size: 20px;
+    background-color: transparent;
+}
+
+QLineEdit#attrInput {
+    background-color: #3d3d3d;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 12px;
+}
+
+QLineEdit#attrInput:focus {
+    border: 1px solid #0078D4;
+}
+
+QPushButton#scriptButton {
+    background-color: #4d4d4d;
+    color: #ffffff;
+    border: 1px solid #5d5d5d;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: monospace;
+}
+
+QPushButton#scriptButton:hover {
+    background-color: #0078D4;
+    border: 1px solid #0078D4;
+}
+
+QComboBox#attrCombo {
+    background-color: #3d3d3d;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 12px;
+}
+
+QComboBox#attrCombo:hover {
+    border: 1px solid #0078D4;
+}
+
+QComboBox#attrCombo::drop-down {
+    border: none;
+    background-color: #4d4d4d;
+    width: 20px;
+}
+
+QComboBox#attrCombo QAbstractItemView {
+    background-color: #3d3d3d;
+    color: #ffffff;
+    selection-background-color: #0078D4;
+    border: 1px solid #4d4d4d;
+}
+
+QPushButton#colorButton {
+    border: 1px solid #4d4d4d;
+    border-radius: 3px;
+}
+
+QPushButton#colorButton:hover {
+    border: 1px solid #0078D4;
+}
+
+QScrollArea#attrScroll {
+    background-color: transparent;
+    border: none;
+}
+
+QWidget#attrWidget{
+    background-color: transparent;
+    border: none;
+}

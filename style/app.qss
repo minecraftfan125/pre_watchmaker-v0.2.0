@@ -1,0 +1,440 @@
+/* app.qss - 主應用程式樣式 */
+
+QMainWindow {
+    background-color: #1e1e1e;
+    border: 1px solid #3d3d3d;
+}
+
+QWidget#titleBar {
+    background-color: #2d2d2d;
+    border-bottom: 2px solid #3d3d3d;
+}
+
+QLabel#titleLabel {
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: bold;
+    padding-left: 5px;
+}
+
+QPushButton {
+    background-color: transparent;
+    color: #ffffff;
+    border: none;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+QPushButton:hover {
+    background-color: #404040;
+}
+
+QPushButton:pressed {
+    background-color: #505050;
+}
+
+QPushButton#closeButton:hover {
+    background-color: #e81123;
+    color: #ffffff;
+}
+
+QWidget#contentWidget {
+    background-color: #1e1e1e;
+    color: #ffffff;
+}
+
+QWidget#sidebar {
+    background-color: #2d2d2d;
+}
+
+QPushButton#switchButton:pressed {
+    background-color: #505050;
+}
+
+QWidget#objectPanel {
+    background-color: #2d2d2d;
+    border-left: 2px solid #3d3d3d;
+}
+
+QSplitter#objectSplitter {
+    background-color: #2d2d2d;
+}
+
+QSplitter#objectSplitter::handle {
+    background-color: #3d3d3d;
+    height: 2px;
+}
+
+QSplitter#objectSplitter::handle:hover {
+    background-color: #0078D4;
+}
+
+QScrollArea#componentsScroll, QScrollArea#attributeScroll {
+    background-color: #2d2d2d;
+    border: none;
+}
+
+QWidget#componentsPanel {
+    background-color: #2d2d2d;
+}
+
+QStackedWidget#attributePanel {
+    background-color: #2d2d2d;
+}
+
+QWidget#attributeContainer {
+    background-color: #2d2d2d;
+}
+
+QListWidget#attributeList {
+    background-color: #2d2d2d;
+    color: #ffffff;
+    border: 1px solid #3d3d3d;
+    border-radius: 4px;
+    padding: 5px;
+    font-size: 13px;
+    outline: none;
+}
+
+QListWidget#attributeList::item {
+    padding: 8px;
+    border-radius: 3px;
+}
+
+QListWidget#attributeList::item:hover {
+    background-color: #3d3d3d;
+}
+
+QListWidget#attributeList::item:selected {
+    background-color: #0078D4;
+    color: #ffffff;
+}
+
+QLabel#panelLabel {
+    background-color: #2d2d2d;
+    color: white;
+    padding: 10px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QScrollBar:vertical {
+    background-color: #2d2d2d;
+    width: 12px;
+    border: none;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #4d4d4d;
+    min-height: 20px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #5d5d5d;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QWidget#mainContentArea {
+    background-color: #1e1e1e;
+}
+
+QWidget#emptyWidget {
+    background-color: #1e1e1e;
+}
+
+QWidget#editViewContainer {
+    background-color: #1e1e1e;
+}
+
+QLabel#editViewTitle {
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: bold;
+    padding: 5px 0px;
+}
+
+QLabel#editViewPlaceholder {
+    color: #888888;
+    font-size: 14px;
+}
+
+QLabel#circleWidget {
+    background-color: transparent;
+}
+
+QWidget#circleArea {
+    background-color: transparent;
+}
+
+QPushButton#componentButton {
+    background-color: #3d3d3d;
+    border: 1px solid #4d4d4d;
+    border-radius: 4px;
+}
+
+QPushButton#componentButton:hover {
+    background-color: #505050;
+    border: 1px solid #0078D4;
+}
+
+QPushButton#componentButton:pressed {
+    background-color: #2d2d2d;
+}
+
+/* Dragable widget 樣式 */
+QWidget[objectName="dragableWidget"] {
+    background-color: transparent;
+}
+
+/* 檔案總管面板樣式 */
+QWidget#fileExplorerPanel {
+    background-color: #2d2d2d;
+    border-right: 2px solid #3d3d3d;
+}
+
+QTreeWidget#fileTree {
+    background-color: #2d2d2d;
+    color: #ffffff;
+    border: none;
+    font-size: 13px;
+    outline: none;
+}
+
+QTreeWidget#fileTree::item {
+    padding: 5px;
+    border: none;
+}
+
+QTreeWidget#fileTree::item:hover {
+    background-color: #3d3d3d;
+}
+
+QTreeWidget#fileTree::item:selected {
+    background-color: #0078D4;
+    color: #ffffff;
+}
+
+QTreeWidget#fileTree::branch {
+    background-color: #2d2d2d;
+}
+
+QTreeWidget#fileTree::branch:hover {
+    background-color: #3d3d3d;
+}
+
+QTreeWidget#fileTree::branch:has-children:!has-siblings:closed,
+QTreeWidget#fileTree::branch:closed:has-children:has-siblings {
+    border-image: none;
+    image: url(none);
+}
+
+QTreeWidget#fileTree::branch:open:has-children:!has-siblings,
+QTreeWidget#fileTree::branch:open:has-children:has-siblings {
+    border-image: none;
+    image: url(none);
+}
+
+QHeaderView::section {
+    background-color: #2d2d2d;
+    color: #ffffff;
+    padding: 5px;
+    border: none;
+    border-bottom: 2px solid #3d3d3d;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* 拖拽反饋樣式 */
+QLabel#cursorIcon {
+    background-color: transparent;
+    border: none;
+}
+
+QWidget#overlayMask {
+    background-color: rgba(255, 255, 255, 0.3);
+}
+
+QWidget#overlayContent {
+    background-color: transparent;
+}
+
+QLabel#overlayIcon {
+    background-color: transparent;
+}
+
+QLabel#overlayText {
+    color: white;
+    font-size: 14px;
+    font-weight: bold;
+    background-color: transparent;
+}
+
+QLabel#borderRect {
+    background-color: transparent;
+    border: 5px dashed white;
+}
+
+/* 屬性編輯器樣式 */
+QLabel#propertyLabel {
+    color: #cccccc;
+    font-size: 12px;
+    background-color: transparent;
+}
+
+QLineEdit#propertyInput {
+    background-color: #3d3d3d;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 12px;
+}
+
+QLineEdit#propertyInput:focus {
+    border: 1px solid #0078D4;
+}
+
+QComboBox#propertyCombo {
+    background-color: #3d3d3d;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 12px;
+}
+
+QComboBox#propertyCombo:hover {
+    border: 1px solid #0078D4;
+}
+
+QComboBox#propertyCombo::drop-down {
+    border: none;
+    background-color: #4d4d4d;
+    width: 20px;
+}
+
+QComboBox#propertyCombo::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 6px solid #ffffff;
+    margin-right: 5px;
+}
+
+QComboBox#propertyCombo QAbstractItemView {
+    background-color: #3d3d3d;
+    color: #ffffff;
+    selection-background-color: #0078D4;
+    border: 1px solid #4d4d4d;
+}
+
+QPushButton#scriptButton {
+    background-color: #4d4d4d;
+    color: #ffffff;
+    border: 1px solid #5d5d5d;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: monospace;
+    padding: 2px;
+}
+
+QPushButton#scriptButton:hover {
+    background-color: #0078D4;
+    border: 1px solid #0078D4;
+}
+
+QPushButton#scriptButton:pressed {
+    background-color: #005a9e;
+}
+
+QPushButton#colorButton {
+    background-color: #3d3d3d;
+    border: 1px solid #4d4d4d;
+    border-radius: 3px;
+}
+
+QPushButton#colorButton:hover {
+    border: 1px solid #0078D4;
+}
+
+QLabel#colorLabel {
+    color: #aaaaaa;
+    font-size: 11px;
+    font-family: monospace;
+    background-color: transparent;
+}
+
+/* Script View 樣式 */
+QWidget#scriptView {
+    background-color: #2d2d2d;
+}
+
+QWidget#scriptTitleBar {
+    background-color: #252525;
+    border-bottom: 1px solid #3d3d3d;
+}
+
+QLabel#scriptTitle {
+    color: #0078D4;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+QWidget#scriptButtonBar {
+    background-color: #252525;
+    border-top: 1px solid #3d3d3d;
+}
+
+QPushButton#returnButton {
+    background-color: #3d3d3d;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 3px;
+    padding: 5px 15px;
+    font-size: 12px;
+}
+
+QPushButton#returnButton:hover {
+    background-color: #4d4d4d;
+    border: 1px solid #0078D4;
+}
+
+QPushButton#clearButton {
+    background-color: #3d3d3d;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 3px;
+    padding: 5px 15px;
+    font-size: 12px;
+}
+
+QPushButton#clearButton:hover {
+    background-color: #c42b1c;
+    border: 1px solid #c42b1c;
+}
+
+QPushButton#applyButton {
+    background-color: #0078D4;
+    color: #ffffff;
+    border: 1px solid #0078D4;
+    border-radius: 3px;
+    padding: 5px 15px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QPushButton#applyButton:hover {
+    background-color: #1084d8;
+}
+
+QPushButton#applyButton:pressed {
+    background-color: #005a9e;
+}

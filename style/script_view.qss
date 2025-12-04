@@ -1,0 +1,275 @@
+/* script_view.qss - Lua 腳本編輯器樣式 */
+
+/* 主視圖 */
+QWidget#scriptView {
+    background-color: #1E1E1E;
+}
+
+/* 標題列 */
+QWidget#scriptTitleBar {
+    background-color: #252526;
+    border-bottom: 1px solid #3D3D3D;
+}
+
+QLabel#scriptTitle {
+    color: #0078D4;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+/* 工具列按鈕 */
+QPushButton#checkButton, QPushButton#formatButton {
+    background-color: #3D3D3D;
+    color: #E0E0E0;
+    border: 1px solid #4D4D4D;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+QPushButton#checkButton:hover, QPushButton#formatButton:hover {
+    background-color: #4D4D4D;
+    border: 1px solid #0078D4;
+}
+
+QPushButton#checkButton:pressed, QPushButton#formatButton:pressed {
+    background-color: #2D2D2D;
+}
+
+/* 底部按鈕列 */
+QWidget#scriptButtonBar {
+    background-color: #252526;
+    border-top: 1px solid #3D3D3D;
+}
+
+QPushButton#returnButton {
+    background-color: #3D3D3D;
+    color: #E0E0E0;
+    border: 1px solid #4D4D4D;
+    border-radius: 4px;
+    padding: 8px 20px;
+    font-size: 12px;
+}
+
+QPushButton#returnButton:hover {
+    background-color: #4D4D4D;
+    border: 1px solid #0078D4;
+}
+
+QPushButton#clearButton {
+    background-color: #3D3D3D;
+    color: #E0E0E0;
+    border: 1px solid #4D4D4D;
+    border-radius: 4px;
+    padding: 8px 20px;
+    font-size: 12px;
+}
+
+QPushButton#clearButton:hover {
+    background-color: #C42B1C;
+    border: 1px solid #C42B1C;
+    color: #FFFFFF;
+}
+
+QPushButton#applyButton {
+    background-color: #0078D4;
+    color: #FFFFFF;
+    border: 1px solid #0078D4;
+    border-radius: 4px;
+    padding: 8px 20px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QPushButton#applyButton:hover {
+    background-color: #1084D8;
+}
+
+QPushButton#applyButton:pressed {
+    background-color: #005A9E;
+}
+
+/* 分割器 */
+QSplitter#contentSplitter::handle {
+    background-color: #3D3D3D;
+    width: 2px;
+}
+
+QSplitter#contentSplitter::handle:hover {
+    background-color: #0078D4;
+}
+
+QSplitter#editorSplitter::handle {
+    background-color: #3D3D3D;
+    height: 2px;
+}
+
+QSplitter#editorSplitter::handle:hover {
+    background-color: #0078D4;
+}
+
+/* API 參考面板 */
+QWidget#apiReferencePanel {
+    background-color: #252526;
+    border-left: 1px solid #3D3D3D;
+}
+
+QLabel#apiTitle {
+    background-color: #2D2D2D;
+    color: #0078D4;
+    font-size: 13px;
+    font-weight: bold;
+    padding: 10px;
+    border-bottom: 1px solid #3D3D3D;
+}
+
+QListWidget#apiList {
+    background-color: #252526;
+    color: #E0E0E0;
+    border: none;
+    font-size: 12px;
+    outline: none;
+}
+
+QListWidget#apiList::item {
+    padding: 6px 10px;
+    border: none;
+}
+
+QListWidget#apiList::item:hover {
+    background-color: #3D3D3D;
+}
+
+QListWidget#apiList::item:selected {
+    background-color: #0078D4;
+    color: #FFFFFF;
+}
+
+QScrollArea#apiDetailScroll {
+    background-color: #2D2D2D;
+    border-top: 1px solid #3D3D3D;
+    border: none;
+}
+
+QLabel#apiDetail {
+    background-color: #2D2D2D;
+    color: #CCCCCC;
+    font-size: 11px;
+    padding: 10px;
+}
+
+QLabel#apiDetail code {
+    color: #CE9178;
+    font-family: Consolas, monospace;
+}
+
+/* 輸出面板 */
+QWidget#outputPanel {
+    background-color: #1E1E1E;
+    border-top: 1px solid #3D3D3D;
+}
+
+QWidget#outputTitleBar {
+    background-color: #252526;
+    border-bottom: 1px solid #3D3D3D;
+}
+
+QLabel#outputTitle {
+    color: #E0E0E0;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QPushButton#outputClearButton {
+    background-color: transparent;
+    color: #858585;
+    border: none;
+    padding: 4px 8px;
+    font-size: 11px;
+}
+
+QPushButton#outputClearButton:hover {
+    color: #E0E0E0;
+    background-color: #3D3D3D;
+    border-radius: 3px;
+}
+
+QTextEdit#outputText {
+    background-color: #1E1E1E;
+    color: #E0E0E0;
+    border: none;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    padding: 10px;
+}
+
+/* 滾動條樣式 */
+QScrollBar:vertical {
+    background-color: #1E1E1E;
+    width: 12px;
+    border: none;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #4D4D4D;
+    min-height: 20px;
+    border-radius: 6px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #5D5D5D;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QScrollBar:horizontal {
+    background-color: #1E1E1E;
+    height: 12px;
+    border: none;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #4D4D4D;
+    min-width: 20px;
+    border-radius: 6px;
+    margin: 2px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #5D5D5D;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: none;
+}
+
+/* 自動完成選單樣式 */
+QListView {
+    background-color: #252526;
+    color: #E0E0E0;
+    border: 1px solid #3D3D3D;
+    selection-background-color: #0078D4;
+    selection-color: #FFFFFF;
+    font-family: Consolas, monospace;
+    font-size: 14px;
+}
+
+QListView::item {
+    padding: 6px 10px;
+    min-height: 24px;
+}
+
+QListView::item:hover {
+    background-color: #3D3D3D;
+}
