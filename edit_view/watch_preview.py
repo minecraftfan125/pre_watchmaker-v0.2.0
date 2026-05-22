@@ -35,11 +35,28 @@ class AddLayer(QUndoCommand):
         self.scene.removeItem(self.layer)
 
 
+class DelLayer(QUndoCommand):
+    def __init__(self, scene: QGraphicsScene, layer, hash_table: dict):
+        super().__init__()
+        self.scene = scene
+        self.layer = layer
+        self.hash_table = hash_table
+
+    def redo(self):
+        self.scene.removeItem(self.layer)
+        self.hash_table.pop(self.layer.id, None)
+
+    def undo(self):
+        self.scene.addItem(self.layer)
+        self.hash_table[self.layer.id] = self.layer
+
+
 class WatchPreview(QGraphicsView):
     select = pyqtSignal(object)
     summon = pyqtSignal(object, object, object)
     receive = pyqtSignal(object, object, object)
     view_change = pyqtSignal(QGraphicsView,QTransform)
+    delete = pyqtSignal(int)
 
     # 場景固定大小 (錶面尺寸)
     SCENE_SIZE = 512
@@ -230,8 +247,12 @@ class WatchPreview(QGraphicsView):
             super().wheelEvent(event)
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Delete:
+            items = self.sence.selectedItems()
+            if items and hasattr(items[0], 'id'):
+                self.delete.emit(items[0].id)
+                return
         if event.key() == Qt.Key.Key_Control:
-            # 按下 Ctrl，切換到手掌抓取模式
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         super().keyPressEvent(event)
 

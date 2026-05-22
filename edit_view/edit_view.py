@@ -15,10 +15,10 @@ from PyQt5.QtGui import (
 )
 from common import load_style, UndoGroupStack
 from edit_view.drag_effect import DragVisual
-from edit_view.attribute_panel import AttributePanal
+from edit_view.attribute_panel import AttributePanal, DelWidget
 from edit_view.components_panel import ComponentPanel
-from edit_view.explorer import Exploror
-from edit_view.watch_preview import WatchPreview
+from edit_view.explorer import Exploror, DelExplorerItem
+from edit_view.watch_preview import WatchPreview, DelLayer
 
 class EditView(QWidget):
     exp_singal = pyqtSignal(object, object, object)
@@ -75,6 +75,8 @@ class EditView(QWidget):
         )
         self.watch_preview.select.connect(self._on_preview_selected)
         self.explorer.item_selected.connect(self._on_explorer_item_selected)
+        self.explorer.delete.connect(self._delete_layer)
+        self.watch_preview.delete.connect(self._delete_layer)
 
     def _on_preview_selected(self, hash_id):
         if self._sync_guard or hash_id is None:
@@ -98,6 +100,18 @@ class EditView(QWidget):
                 layer.setSelected(True)
         finally:
             self._sync_guard = False
+
+    def _delete_layer(self, hash_id):
+        widget = self.attribute.find(hash_id)
+        layer = self.watch_preview.hash_table.get(hash_id)
+        explorer_item = self.explorer.items.get(str(hash_id))
+        if not (widget and layer and explorer_item):
+            return
+        self.undo_stack.beginMacro("Delete Layer")
+        self.undo_stack.push(DelWidget(widget, self.attribute, hash_id))
+        self.undo_stack.push(DelLayer(self.watch_preview.sence, layer, self.watch_preview.hash_table))
+        self.undo_stack.push(DelExplorerItem(explorer_item, self.explorer.tree, self.explorer.items))
+        self.undo_stack.endMacro()
 
     def delete_component(self, obj):
         self.id_stack.append(obj.hash_id)

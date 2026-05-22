@@ -110,13 +110,13 @@ class AttributeForm(QScrollArea):
                 self.row_layout.setContentsMargins(0, 2, 0, 2)
                 self.row_layout.setSpacing(8)
                 self.row_layout.addWidget(self.left)
-                self.row_layout.addWidget(self.right, 1)
+                self.row_layout.addWidget(self.right)
                 return
             self.row_layout = QVBoxLayout(self)
             self.row_layout.setContentsMargins(0, 2, 0, 2)
             self.row_layout.setSpacing(8)
             self.row_layout.addWidget(self.left)
-            self.row_layout.addWidget(self.right, 1)
+            self.row_layout.addWidget(self.right)
 
         def _create_str_ui(self):
             if self.name in ["Text", "Script"]:
@@ -283,7 +283,6 @@ class AttributeForm(QScrollArea):
         
         def user_input(self,value,edit_finish=False):
             update_stack,value=self.value_processing(value)
-            print(update_stack,value)
             self.edit_finish=edit_finish
             if update_stack and self.name!="Name":
                 self.signal.emit(self.convert(value))
@@ -533,11 +532,15 @@ class AttributePanal(StackWidget):
             self.undo_stack.push(command)
 
     def go_back(self):
+        if len(self.opened_widget) <= 1:
+            return
         self.opened_widget.pop()
-        while self.opened_widget[-1] in self.del_widget:
+        while self.opened_widget and (
+            self.opened_widget[-1] in self.del_widget
+            or self.indexOf(self.opened_widget[-1]) == -1
+        ):
             self.opened_widget.pop()
-        if self.opened_widget == []:
-            self.toggle_widget(1)
+        if not self.opened_widget:
             return
         self.toggle_widget(self.opened_widget[-1])
 
@@ -644,3 +647,21 @@ class AddWidget(QUndoCommand):
         if self.cancel:
             self.target.removeWidget(self.widget)
             self.widget.deleteLater()
+
+
+class DelWidget(QUndoCommand):
+    def __init__(self, widget: QWidget, target: AttributePanal, id):
+        super().__init__()
+        self.widget = widget
+        self.target = target
+        self.hash_id = id
+
+    def redo(self):
+        if self.target.currentWidget() is self.widget:
+            self.target.go_back()
+        if self.target.currentWidget() is self.widget:
+            self.target.go_home()
+        self.target.removeWidget(self.widget)
+
+    def undo(self):
+        super(AttributePanal, self.target).addWidget(self.widget, self.hash_id, False)

@@ -68,6 +68,8 @@ from common import FlowLayout, StackWidget, FontManager
 import components
 import numpy as np
 
+_HANDLE_Z_BASE = 9_000_000.0
+
 _ANGLE_CURSORS = [
     (  0.0, Qt.SizeHorCursor),        # ←→  East / West
     ( 45.0, Qt.SizeBDiagCursor),      # ↙↗  NE  / SW
@@ -475,7 +477,7 @@ class RotateHandle(QGraphicsEllipseItem):
             self.radius * 2,
         )
         self.scene().addItem(self.pie_chart)
-        self.pie_chart.setZValue(4002)
+        self.pie_chart.setZValue(_HANDLE_Z_BASE + 1)
         self.pie_chart.setBrush(QBrush(color))
         self.pie_chart.setPen(QPen(Qt.NoPen))
         
@@ -647,6 +649,8 @@ class GraphicsScene(QGraphicsScene):
     def __init__(self, parent=None, signal=None):
         super().__init__(parent)
         self.signal = signal
+        self._insertion_counter = 0
+        self._insertion_map = {}  # component.id → insertion_index (stable across undo/redo)
         if signal is not None:
             self.signal.connect(self.viewChangeEvent)
         self.selectionChanged.connect(self._on_selection_changed)
@@ -660,13 +664,23 @@ class GraphicsScene(QGraphicsScene):
 
     def addItem(self, item):
         super().addItem(item)
-        if isinstance(item, SelectionBox):
+        if isinstance(item, Component):
+            if item.id not in self._insertion_map:
+                self._insertion_map[item.id] = self._insertion_counter
+                self._insertion_counter += 1
+            item.setZValue(item.z_order + self._insertion_map[item.id] / 1_000_000)
+        elif isinstance(item, SelectionBox):
+            item.setZValue(_HANDLE_Z_BASE)
             self.view_transform.connect(item.update_child_state)
 
     def removeItem(self, item):
         super().removeItem(item)
         if isinstance(item, SelectionBox):
             self.view_transform.disconnect(item.update_child_state)
+
+    def _recompute_z(self, component: 'Component'):
+        idx = self._insertion_map.get(component.id, 0)
+        component.setZValue(component.z_order + idx / 1_000_000)
 
     def viewChangeEvent(self, view, transform):
         self.view_transform.emit(transform)
@@ -726,7 +740,11 @@ class Component:
         pass
 
     def order(self, value):
-        self.setZValue(-999 + value)
+        self.z_order = value
+        scene = self.scene()
+        if scene:
+            scene._recompute_z(self)
+
 
     def rename(self, value):
         self.name = value
@@ -923,7 +941,6 @@ class textLayer(Component, QGraphicsTextItem):
         self.setDefaultTextColor(QColor(color_str))
 
     def setAlignment(self, value):
-        print(value)
         if "c" in value.lower():
             self.x_offset = 0
             self.y_offset = 0

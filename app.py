@@ -23,10 +23,10 @@ class MainWindow(QMainWindow):
         # 設置無邊框視窗
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setMouseTracking(True)
-        self.setMinimumSize(300,200)
+        self.setMinimumSize(1200,700)
 
         # 視窗初始大小
-        self.resize(1000, 700)
+        self.resize(1200, 700)
 
         # 用於拖曳視窗的變量
         self.dragging = False

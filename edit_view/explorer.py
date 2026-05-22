@@ -6,6 +6,9 @@ from PyQt5.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QComboBox,
+    QMenu,
+    QAction,
+    QUndoCommand,
 )
 from PyQt5.QtCore import (
     Qt,
@@ -18,7 +21,6 @@ import re
 from edit_view.drag_effect import *
 
 class ItemSignals(QObject):
-    name_collision = pyqtSignal(str, str)
     level_change = pyqtSignal(object, int)
 @Dragable("id")
 class ExplororItem(QTreeWidgetItem):
@@ -30,8 +32,7 @@ class ExplororItem(QTreeWidgetItem):
         self.layer_type = layer_type
         self._parent = parent
         self.level = 0
-        self.name = None
-        self.stablize_name = ""
+        self.name = ""
         self.id = str(id)
         self.signals = ItemSignals()
         self.name_signal = att_signal_dict["Name"]
@@ -39,16 +40,9 @@ class ExplororItem(QTreeWidgetItem):
         self.setText(1, re.sub(r"Layer$", "", self.layer_type))
         self.level_signal.connect(self.change_z_order)
 
-    def rename(self, name, collision=True):
-        if self.name is not None and name == self.name:
-            return
+    def rename(self, name):
         self.setText(0, name)
-        if collision:
-            self.signals.name_collision.emit(name, self.name)
-        else:
-            self.name = name
-            self.name_signal.edit_finish()
-            self.name_signal.emit(name)
+        self.name = name
 
     def change_z_order(self, value):
         if value == self.level:
@@ -84,37 +78,78 @@ class ExplororTree(QTreeWidget):
         self.reference_item = None
         self.setSortingEnabled(True)
         self.item_level = {}
-        self.item_name = []
+        self.name_allocator = {}
+        self.layer_allocator=[0 for i in range(5001)]
         self.undo_stack = None
+        self.cache_idx=0
 
     def add_item(self, item: ExplororItem):
         self.setCurrentItem(item)
         self.addTopLevelItem(item)
-        item.signals.name_collision.connect(
-            lambda name, del_name: self.set_name(item, name, del_name)
-        )
-        item.name_signal.connect(item.rename)
+        item.name_signal.connect(lambda name: self.set_name(item, name))
 
-    def set_name(self, item, value, del_name):
-        if del_name in self.item_name:
-            self.item_name.remove(del_name)
-        if value in self.item_name:
-            base_name = re.sub(r" \d$", "", value)
-            counter = 1
-            new_name = base_name
-            while new_name in self.item_name:
-                new_name = base_name + " " + str(counter)
-                counter += 1
-            if self.undo_stack is not None:
-                try:
-                    self.undo_stack.undo()
-                except Exception:
-                    pass
-            self.item_name.append(new_name)
-            item.rename(new_name, False)
+    def _release_name(self,name,base,num):
+        current=self.name_allocator.get(name,False)
+        if current:
+            if current[0]==1:
+                del current
+                return
+            current.append(0)
             return
-        self.item_name.append(value)
-        item.rename(value, False)
+        current=self.name_allocator.get(base,False)
+        if current:
+            if num==current[0]-1:
+                current[0]-=1
+                while current[0]-1 in current:
+                    current.remove(current[0]-1)
+                    current[0]-=1
+                if current[0]==0:
+                    del current
+                return
+            self.name_allocator[base].append(num)
+
+    def _new_name(self,name,base,num):
+        current=self.name_allocator.get(name,False)
+        if current:
+            num=current.pop()
+            while len(current)==0:
+                current.append(num+1)
+                if name+f" {num}" in self.name_allocator:
+                    num=current.pop()
+            return name+f" {num}"
+        current=self.name_allocator.get(base,False)
+        if current and num<current[0]:
+            if num in current[1:]:
+                current.remove(num)
+                return name
+            num=current.pop()
+            while len(current)==0:
+                current.append(num+1)
+                if base+f" {num}" in self.name_allocator:
+                    num=current.pop()
+            return base+f" {num}"
+        self.name_allocator[name]=[1]
+        return name
+    
+    def set_name(self, item, value):
+        _int=re.compile(r" ([1-9]\d*)$")
+        del_name=item.name
+        if del_name==value:
+            return
+        serial_num=re.search(_int,value)
+        base_name=re.sub(_int, "", value)
+        del_serial_num=re.search(_int,del_name)
+        del_base_name=re.sub(_int, "", del_name)
+        serial_num= int(serial_num.group(1)) if serial_num else 0
+        del_serial_num= int(del_serial_num.group(1)) if del_serial_num else 0
+
+        self._release_name(del_name,del_base_name,del_serial_num)
+        
+        name=self._new_name(value,base_name,serial_num)
+
+        item.rename(name)
+        item.name_signal.edit_finish()
+        item.name_signal.emit(name)
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
@@ -147,6 +182,24 @@ class ExplororTree(QTreeWidget):
         while last_item.isExpanded() and last_item.childCount() > 0:
             last_item = last_item.child(last_item.childCount() - 1)
         return last_item
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Delete:
+            item = self.currentItem()
+            if item and hasattr(item, 'id'):
+                self.parent().request_delete(item.id)
+                return
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        item = self.itemAt(event.pos())
+        if item is None or not hasattr(item, 'id'):
+            return
+        menu = QMenu(self)
+        delete_action = QAction("Delete", self)
+        delete_action.triggered.connect(lambda: self.parent().request_delete(item.id))
+        menu.addAction(delete_action)
+        menu.exec_(event.globalPos())
 
     def required_visual_effects(self, pos):
         item = self.itemAt(pos)
@@ -286,8 +339,29 @@ class Exploror(QWidget):
                 pass
         self.override.hide()
 
+    def request_delete(self, item_id):
+        self.delete.emit(int(item_id))
+
     def required_visual_effects(self, event):
         pos = self.mapToGlobal(event.pos())
         pos = self.tree.viewport().mapFromGlobal(pos)
         pos, size = self.tree.required_visual_effects(pos)
         return pos, size
+
+
+class DelExplorerItem(QUndoCommand):
+    def __init__(self, item, tree: ExplororTree, items_dict: dict):
+        super().__init__()
+        self.item = item
+        self.tree = tree
+        self.items_dict = items_dict
+
+    def redo(self):
+        idx = self.tree.indexOfTopLevelItem(self.item)
+        self.tree.takeTopLevelItem(idx)
+        self.items_dict.pop(self.item.id, None)
+
+    def undo(self):
+        self.tree.addTopLevelItem(self.item)
+        self.items_dict[self.item.id] = self.item
+        self.tree.sortItems(0, Qt.AscendingOrder)
