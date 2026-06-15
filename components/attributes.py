@@ -64,7 +64,6 @@ text = [
     {
         "Animation": [
             {"TYPE": "animationWidget"},
-            {"Button display": "Animation in", "description": "Display condition"},
             {"Animation in": "None", "description": "Entry animation"},
             {"Delay start": 0, "description": "Delay before start"},
             {"Duration in": 0.5, "description": "Entry animation duration"},
@@ -355,7 +354,6 @@ event = [
     {
         "Animation": [
             {"TYPE": "animationWidget"},
-            {"Button display": "None", "description": "Display condition"},
             {"Animation in": "None", "description": "Entry animation"},
             {"Delay start": 0, "description": "Delay before start"},
             {"Duration in": 0.5, "description": "Entry animation duration"},
@@ -407,7 +405,6 @@ countdown = [
     {
         "Animation": [
             {"TYPE": "animationWidget"},
-            {"Button display": "None", "description": "Display condition"},
             {"Animation in": "None", "description": "Entry animation"},
             {"Delay start": 0, "description": "Delay before start"},
             {"Duration in": 0.5, "description": "Entry animation duration"},
@@ -659,7 +656,6 @@ date = [
     {
         "Animation": [
             {"TYPE": "animationWidget"},
-            {"Button display": "None", "description": "Display condition"},
             {"Animation in": "None", "description": "Entry animation"},
             {"Delay start": 0, "description": "Delay before start"},
             {"Duration in": 0.5, "description": "Entry animation duration"},
@@ -711,7 +707,6 @@ steps = [
     {
         "Animation": [
             {"TYPE": "animationWidget"},
-            {"Button display": "None", "description": "Display condition"},
             {"Animation in": "None", "description": "Entry animation"},
             {"Delay start": 0, "description": "Delay before start"},
             {"Duration in": 0.5, "description": "Entry animation duration"},
@@ -983,7 +978,6 @@ time = [
     {
         "Animation": [
             {"TYPE": "animationWidget"},
-            {"Button display": "None", "description": "Display condition"},
             {"Animation in": "None", "description": "Entry animation"},
             {"Delay start": 0, "description": "Delay before start"},
             {"Duration in": 0.5, "description": "Entry animation duration"},
@@ -1035,7 +1029,6 @@ stopWatch1 = [
     {
         "Animation": [
             {"TYPE": "animationWidget"},
-            {"Button display": "None", "description": "Display condition"},
             {"Animation in": "None", "description": "Entry animation"},
             {"Delay start": 0, "description": "Delay before start"},
             {"Duration in": 0.5, "description": "Entry animation duration"},
@@ -1087,7 +1080,6 @@ stopWatch2 = [
     {
         "Animation": [
             {"TYPE": "animationWidget"},
-            {"Button display": "None", "description": "Display condition"},
             {"Animation in": "None", "description": "Entry animation"},
             {"Delay start": 0, "description": "Delay before start"},
             {"Duration in": 0.5, "description": "Entry animation duration"},
@@ -1139,7 +1131,6 @@ stopWatch3 = [
     {
         "Animation": [
             {"TYPE": "animationWidget"},
-            {"Button display": "None", "description": "Display condition"},
             {"Animation in": "None", "description": "Entry animation"},
             {"Delay start": 0, "description": "Delay before start"},
             {"Duration in": 0.5, "description": "Entry animation duration"},
