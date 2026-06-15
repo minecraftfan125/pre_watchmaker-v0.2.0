@@ -125,8 +125,7 @@ pre_watchmaker/
 │   ├── my_watches/       # WatchCabinet toolbar icons
 │   └── edit/             # Watch edit area icons (eye, day/night mode)
 ├── img/recolor.py        # Utility script for recoloring single-color images
-├── all_test/             # All tests (pytest + pytest-qt)
-└── watchmaker_md/        # Local WatchMaker wiki (.md) for layer/Lua reference
+└── all_test/             # All tests (pytest + pytest-qt)
 ```
 
 ## License
