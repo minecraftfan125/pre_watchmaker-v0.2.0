@@ -533,7 +533,7 @@ class _CompletionPopup(QListWidget):
 
 # ── 編輯器面板 ────────────────────────────────────────────────────────────────
 
-# color は QPalette で設定するため QSS に含めない（QSyntaxHighlighter と競合回避）
+# 顏色是在 QPalette 中設定的，因此它不包含在 QSS 中（以避免與 QSyntaxHighlighter 衝突）
 _EDIT_QSS = """
 QPlainTextEdit {
     background: #0E0E13;
