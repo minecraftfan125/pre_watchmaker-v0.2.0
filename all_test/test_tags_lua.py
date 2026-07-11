@@ -204,16 +204,21 @@ class TestEvalLuaExprManualTags:
         assert result == pytest.approx(0.0)
 
     def test_string_tag_in_concat(self):
-        # {unit} 不加引號 → 預處理成 __unit__（Lua 變數），可取到設定值
+        # {unit} → _WM_TAGS["unit"]，可取到設定值
         set_tag_value("unit", "42")
         result = eval_lua_expr('"Temp:" .. {unit}')
         assert isinstance(result, str)
         assert "42" in result
 
     def test_tag_not_set_returns_none_or_zero(self):
-        # 未設定的 tag → __xyz__ 為 nil → eval 通常失敗 → None
+        # 未設定的 tag → _WM_TAGS["xyz_unset"] 為 nil → eval 失敗 → None
         result = eval_lua_expr("{xyz_unset}")
         # 不 crash，回傳 None（nil）
+        assert result is None
+
+    def test_double_underscore_is_not_a_tag(self):
+        """__dh__ 語法不再自動解析為時間 tag，應回傳 None。"""
+        result = eval_lua_expr("__dh__")
         assert result is None
 
     def test_string_tag_accessed_as_variable(self):

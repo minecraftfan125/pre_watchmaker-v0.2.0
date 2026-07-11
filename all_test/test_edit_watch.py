@@ -37,17 +37,6 @@ def two_panel_manager(qtbot):
     return mgr, panel_a, panel_b
 
 
-@pytest.fixture
-def single_panel_manager(qtbot):
-    """手動將 _widgets 縮減為一個，測試「最後一個面板不可關閉」。"""
-    mgr = PanelWidgetManager()
-    qtbot.addWidget(mgr)
-    mgr.show()
-    qtbot.waitExposed(mgr)
-    mgr._widgets = mgr._widgets[:1]
-    return mgr
-
-
 # ── PanelHeader ───────────────────────────────────────────────────────────────
 
 class TestPanelHeader:
@@ -60,10 +49,7 @@ class TestPanelHeader:
         return pw
 
     def test_height(self, panel):
-        assert panel._header.height() == 28
-
-    def test_has_close_button(self, panel):
-        assert hasattr(panel._header, '_close_btn')
+        assert panel._header.height() == 24
 
     def test_cursor_is_size_all(self, panel):
         assert panel._header.cursor().shape() == Qt.CursorShape.SizeAllCursor
@@ -91,23 +77,6 @@ class TestPanelWidget:
         panel = manager._widgets[0]
         panel._set_empty()
         assert panel._empty is True
-
-    def test_close_single_panel_does_nothing(self, qtbot, single_panel_manager):
-        """只剩一個 panel 時，關閉鈕不移除 panel。"""
-        mgr = single_panel_manager
-        panel = mgr._widgets[0]
-        qtbot.mouseClick(panel._header._close_btn, Qt.MouseButton.LeftButton)
-        assert len(mgr._widgets) == 1
-
-    def test_close_removes_panel_when_multiple(self, qtbot, two_panel_manager):
-        mgr, panel_a, panel_b = two_panel_manager
-        qtbot.mouseClick(panel_a._header._close_btn, Qt.MouseButton.LeftButton)
-        assert panel_a not in mgr._widgets
-
-    def test_close_leaves_other_panel(self, qtbot, two_panel_manager):
-        mgr, panel_a, panel_b = two_panel_manager
-        qtbot.mouseClick(panel_a._header._close_btn, Qt.MouseButton.LeftButton)
-        assert panel_b in mgr._widgets
 
 
 # ── PanelWidgetManager ────────────────────────────────────────────────────────
@@ -160,12 +129,6 @@ class TestPanelWidgetManager:
     def test_two_panels_in_widgets(self, two_panel_manager):
         mgr, panel_a, panel_b = two_panel_manager
         assert len(mgr._widgets) == 4
-
-    def test_close_reduces_widget_count(self, qtbot, two_panel_manager):
-        mgr, panel_a, panel_b = two_panel_manager
-        initial = len(mgr._widgets)
-        qtbot.mouseClick(panel_a._header._close_btn, Qt.MouseButton.LeftButton)
-        assert len(mgr._widgets) == initial - 1
 
     @pytest.mark.parametrize("zone", ["top", "bottom", "left", "right"])
     def test_cross_split_preserves_source_panel(self, manager, zone):

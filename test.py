@@ -1,10 +1,13 @@
 """
 測試執行器：呼叫 pytest 執行 all_test/ 目錄內的所有測試。
+預設以 pytest-xdist 平行執行（-n auto，依 CPU 核心數自動分配 worker process）。
 
 使用方式：
-    python test.py              # 執行所有測試
+    python test.py              # 平行執行所有測試
     python test.py -v           # 詳細輸出
     python test.py -k keyword   # 只執行名稱含 keyword 的測試
+    python test.py -n 0         # 停用平行化，改為單一 process 循序執行
+    python test.py -n 4         # 指定 4 個 worker process
 """
 
 import os
@@ -26,7 +29,16 @@ def main() -> None:
         sys.exit(0)
 
     # 將 all_test/ 作為起點，並把使用者傳入的參數原封不動交給 pytest
-    args = [str(TEST_DIR)] + sys.argv[1:]
+    user_args = sys.argv[1:]
+    has_dist_opt = any(
+        a in ("-n", "--numprocesses") or a.startswith("-n=") or a.startswith("--numprocesses=")
+        for a in user_args
+    )
+    args = [str(TEST_DIR)] + user_args
+    if not has_dist_opt:
+        # 每個 worker process 各自持有獨立的 QApplication，
+        # 平行執行對 PyQt6/pytest-qt 測試是安全的
+        args += ["-n", "auto"]
     sys.exit(pytest.main(args))
 
 

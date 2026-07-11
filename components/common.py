@@ -63,7 +63,7 @@ textLayer = {
         "Bottom right",
     ],
     "Transform": ["None"],
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Shader": ["None"],
     "Tap action": ["None"],
     "Text effect": ["None"],
@@ -98,7 +98,7 @@ layer3D = {
     "Gyro effect": (1, 2048, 0),
     "Opacity": (0, 100, 0),
     "Color": "color",
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
 }
 
 # Curved Text Layer (曲線文字圖層) - inherits from textLayer
@@ -120,6 +120,8 @@ curvedTextLayer = {
     "Skew X": (0, 90, 0),
     "Skew Y": (0, 90, 0),
     "Opacity": (0, 100, 0),
+    "Radius": (1, 2048, 0),
+    "Direction": ["Up", "Down"],
     "Alignment": [
         "Center",
         "Top left",
@@ -132,13 +134,11 @@ curvedTextLayer = {
         "Bottom right",
     ],
     "Transform": ["None"],
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Shader": ["None"],
     "Tap action": ["None"],
     "Text effect": ["None"],
     "Keep position if card displayed": "bool",
-    "Radius": (1, 2048, 0),
-    "Direction": ["Up"],
 }
 
 # Image Layer (圖片圖層) - inherits from textLayer
@@ -166,7 +166,7 @@ imageLayer = {
         "Bottom center",
         "Bottom right",
     ],
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Shader": ["None"],
     "Tap action": ["None"],
     "Custom image": "file",
@@ -206,12 +206,43 @@ tachymeterLayer = {
     "Transform": ["None"],
     "Marker width": (1, 2048, 1),
     "Marker height": (1, 2048, 1),
-    "Major markers": ["Medium"],
-    "Minor markers": ["Medium"],
-    "Speeds": ["400,300,240,200,180,160,140,120,110,95,90,85,80,75,70,65,60"],
-    "Text rotation": ["Rotate Upright"],
-    "Squarify": (1, 2048, 1),
-    "Display": ["Always"],
+    "Major markers": [
+        "None",
+        "Tiny",
+        "Small",
+        "Medium",
+        "Large",
+        "XLarge",
+        "Circle",
+        "Triangle",
+    ],
+    "Minor markers": [
+        "None",
+        "Tiny",
+        "Small",
+        "Medium",
+        "Large",
+        "XLarge",
+        "Circle",
+        "Triangle",
+    ],
+    "Speeds": [
+        "400,300,240,200,180,160,140,120,110,95,90,85,80,75,70,65,60",
+        "400,300,240,200,180,160,140,120,110,90,80,75,70,65,60",
+        "320,250,200,180,160,140,120,110,90,80,75,70,65,60",
+        "300,240,200,150,135,120,110,90,80,75,70,65,60",
+        "300,240,200,160,140,120,100,90,80,70,60",
+        "Custom"
+        ],
+    "Custom speeds": "str",
+    "Text rotation": [
+        "Upright",
+        "Rotate",
+        "Rotate Inverse",
+        "Rotate Upright",
+    ],
+    "Squarify": (1, 100, 1),
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Tap action": ["None"],
     "Text effect": ["None"],
     "Keep position if card displayed": "bool",
@@ -221,7 +252,7 @@ tachymeterLayer = {
 shapeLayer = {
     "Name": "str",
     "Layer": (0, 5000, 1),
-    "Shape": ["square"],
+    "Shape": ["Square","Circle","Triangle","Pentagon","Hexagon","Star","Heart"],
     "X": (-1280, 1280, 0),
     "Y": (-1280, 1280, 0),
     "Gyro effect": (1, 2048, 0),
@@ -243,24 +274,20 @@ shapeLayer = {
         "Bottom right",
     ],
     "Color": "color",
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Shader": ["None"],
     "Tap action": ["None"],
     "Shape effect": ["None"],
 }
 
-# Marker Layer (標記圖層) - inherits from tachymeterLayer
+# Marker Layer (標記圖層)
 markerLayer = {
     "Name": "str",
     "Layer": (0, 5000, 1),
-    "Text": "text",
     "X": (-1280, 1280, 0),
     "Y": (-1280, 1280, 0),
     "Gyro effect": (1, 2048, 0),
-    "Font": "font",
-    "Text size": (1, 2048, 0),
     "Color": "color",
-    "Color dim": "color",
     "Anim scale X": (-2048, 2048, 0),
     "Anim scale Y": (-2048, 2048, 0),
     "Radius": (1, 2048, 0),
@@ -268,23 +295,17 @@ markerLayer = {
     "Skew X": (0, 90, 0),
     "Skew Y": (0, 90, 0),
     "Opacity": (0, 100, 0),
-    "Alignment": [
-        "Center",
-        "Top left",
-        "Top center",
-        "Top right",
-        "Center left",
-        "Center right",
-        "Bottom left",
-        "Bottom center",
-        "Bottom right",
-    ],
     "Transform": ["None"],
-    "Marker width": (1, 2048, 1),
-    "Marker height": (1, 2048, 1),
-    "Marker count": (1, 2048, 1),
+    "Marker width": (1, 50, 1),
+    "Marker height": (1, 50, 1),
+    "Marker count": (1, 360, 1),
+    "Shape": [
+        "Square",
+        "Circle",
+        "Triangle"
+    ],
     "Squarify": (0, 100, 1),
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Tap action": ["None"],
     "Text effect": ["None"],
 }
@@ -316,7 +337,7 @@ mapLayer = {
         "Bottom center",
         "Bottom right",
     ],
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Shader": ["None"],
     "Tap action": ["None"],
     "Map effect": ["None"],
@@ -324,9 +345,16 @@ mapLayer = {
 
 # Slideshow Layer (幻燈片圖層) - inherits from imageLayer
 slideshowLayer = {
-    "Photo": "file",
+    "Name": "str",
+    "Layer": (0, 5000, 1),
+    "Photo": "files",
     "Photo duration": (1, 2048, 1),
-    "Photo clip": ["corner1"],
+    "Photo clip": [
+        "None",
+        "Circle",
+        "Corner 1",
+        "Corner 2",
+    ],
     "X": (-1280, 1280, 0),
     "Y": (-1280, 1280, 0),
     "Gyro effect": (1, 2048, 0),
@@ -348,7 +376,7 @@ slideshowLayer = {
         "Bottom center",
         "Bottom right",
     ],
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Shader": ["None"],
     "Tap action": ["None"],
     "Keep position if card displayed": "bool",
@@ -371,27 +399,35 @@ textRingLayer = {
     "Skew X": (0, 90, 0),
     "Skew Y": (0, 90, 0),
     "Opacity": (0, 100, 0),
-    "Alignment": [
-        "Center",
-        "Top left",
-        "Top center",
-        "Top right",
-        "Center left",
-        "Center right",
-        "Bottom left",
-        "Bottom center",
-        "Bottom right",
-    ],
     "Transform": ["None"],
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Radius": (1, 2048, 0),
-    "Ring type": ["1-12"],
+    "Ring type": [
+        "1-12",
+        "1-24",
+        "1-30",
+        "1-31",
+        "1-60",
+        "1-100",
+        "Custom (x to y)",
+        "I-XII",
+        "Mo-Su",
+        "Mon-Sun",
+        "Jan-Dec",
+    ],
+    "Custom start": (-2048, 2048, 1),
+    "Custom end": (-2048, 2048, 12),
     "Show every": (1, 2048, 1),
     "Hide text": "str",
-    "Text rotation": ["Upright"],
+    "Text rotation": [
+        "Upright",
+        "Rotate",
+        "Rotate Inverse",
+        "Rotate Upright",
+    ],
     "Angle start": (1, 2048, 1),
     "Angle end": (1, 2048, 1),
-    "Squarify": (1, 2048, 1),
+    "Squarify": (1, 100, 1),
     "Shader": ["None"],
     "Tap action": ["None"],
     "Text effect": ["None"],
@@ -406,7 +442,7 @@ roundedRectangleLayer = {
     "Width": (1, 2048, 0),
     "Height": (1, 2048, 0),
     "Corner radius": (1, 2048, 0),
-    "Corner type": (1, 2048, 1),
+    "Corner type": (1, 15, 1),
     "Rotation": (-720, 720, 0),
     "Skew X": (0, 90, 0),
     "Skew Y": (0, 90, 0),
@@ -423,7 +459,7 @@ roundedRectangleLayer = {
         "Bottom right",
     ],
     "Color": "color",
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Shader": ["None"],
     "Tap action": ["None"],
     "Shape effect": ["None"],
@@ -459,7 +495,7 @@ seriesLayer = {
         "Bottom right",
     ],
     "Transform": ["None"],
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Series type": ["Day of the week short"],
     "Orientation": ["Vertical"],
     "Current position": ["Current Centered"],
@@ -502,7 +538,7 @@ complicationLayer = {
         "Bottom right",
     ],
     "Transform": ["None"],
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
 }
 
 # Chart Layer (圖表圖層)
@@ -536,7 +572,7 @@ chartLayer = {
     "Labels": "str",
     "Anim scale X": (-2048, 2048, 0),
     "Anim scale Y": (-2048, 2048, 0),
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
 }
 
 # Image Condition Layer (條件圖片圖層) - inherits from textLayer
@@ -564,10 +600,10 @@ imageCondLayer = {
         "Bottom center",
         "Bottom right",
     ],
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
     "Shader": ["None"],
     "Image selection": (1, 2048, 0),
-    "Image grid": ["3x3"],
+    "Image grid": ["2x2", "3x2", "3x3", "4x3", "4x4", "5x5"],
     "Tap action": ["None"],
     "Custom image": "file",
     "Weather includes night symbols": "bool",
@@ -598,7 +634,7 @@ imageGifLayer = {
     "Width": (1, 2048, 0),
     "Height": (1, 2048, 0),
     "Gif delay": (1, 2048, 0),
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
 }
 
 # Progress Layer (進度條圖層)
@@ -625,7 +661,7 @@ progressLayer = {
     "Corner type": (1, 2048, 1),
     "Anim scale X": (-2048, 2048, 0),
     "Anim scale Y": (-2048, 2048, 0),
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
 }
 
 # Ring Layer (圓環圖層)
@@ -649,7 +685,7 @@ ringLayer = {
     "Outside opacity": (0, 100, 0),
     "Anim scale X": (-2048, 2048, 0),
     "Anim scale Y": (-2048, 2048, 0),
-    "Display": ["Always"],
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
 }
 
 # Markers HM Layer (時分標記圖層) - inherits from markerLayer
@@ -668,32 +704,32 @@ markersHMLayer = {
     "Minute markers": ["Medium"],
     "Hour color": "color",
     "Minute color": "color",
-    "Squarify": (1, 2048, 1),
-    "Display": ["Always"],
+    "Squarify": (1, 100, 1),
+    "Display": ["Always", "Bright only", "Dimmed only", "Never"],
 }
 
 # Export all Layer definitions
 __all__ = [
     "baseLayer",
-    "animationWidget",
+    "animationWidget", #need information
     "textLayer",
-    "directionalLightLayer",
-    "layer3D",
+    "directionalLightLayer", #incomplete
+    "layer3D", #incomplete
     "curvedTextLayer",
     "imageLayer",
     "tachymeterLayer",
     "shapeLayer",
     "markerLayer",
-    "mapLayer",
-    "slideshowLayer",
-    "textRingLayer",
+    "mapLayer", #incomplete
+    "slideshowLayer", 
+    "textRingLayer", 
     "roundedRectangleLayer",
-    "seriesLayer",
-    "complicationLayer",
-    "chartLayer",
+    "seriesLayer", #incomplete
+    "complicationLayer", #incomplete
+    "chartLayer", #need information
     "imageCondLayer",
-    "imageGifLayer",
-    "progressLayer",
-    "ringLayer",
-    "markersHMLayer",
+    "imageGifLayer", #need information
+    "progressLayer", #need information
+    "ringLayer", #need information
+    "markersHMLayer", #incomplete
 ]

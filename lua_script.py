@@ -8,16 +8,10 @@ lua_script.py — Lua 腳本分頁面板
   下半右  _LuaObjectExplorer（物件可見性控制）
 
 TODO（尚未實作）：
-  - wm_action() 字串參數補全：偵測游標在 wm_action('...') 引號內時，
-    提供 tap_action 常數清單（color_switch_next / w_app: / m_app: 等）。
-  - wm_anim_set() 第二引數補全：偵測 wm_anim_set('name', '...') 時，
-    提供 'anim_in' / 'dur_in' / 'anim_out' / 'dur_out' 等欄位名稱。
   - shader 參數 tooltip：當圖層屬性含 shader 欄位時，
     在 SyntaxPanel 或 hover tooltip 顯示 u_1~u_4 的語義說明
     （Segment: u_1=角度, u_2=偏移, u_3=內側不透明度；
      GradientLinear: u_1=起始色, u_2=終止色, u_3=角度°, u_4=不透明度%）。
-  - tweens.* 動態補全：解析目前腳本中所有 wm_schedule{tween='...'} 呼叫，
-    在圖層表達式輸入 'tweens.' 後提供已定義的 tween 名稱清單。
 """
 from __future__ import annotations
 
@@ -46,7 +40,10 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit, QSplitter, QListWidget, QListWidgetItem,
     QSizePolicy, QScrollArea,
 )
-from components.utils import set_tag_value, TAG_RE, _AUTO_TIME_TAG_NAMES, _TAG_VALUES
+from components.utils import (
+    set_tag_value, TAG_RE, _AUTO_TIME_TAG_NAMES, _TAG_VALUES,
+    get_tween_names,
+)
 
 if TYPE_CHECKING:
     from edit_watch import PanelWidgetManager
@@ -144,6 +141,21 @@ WM_EASING: list[str] = [
     "inBack",    "outBack",    "inOutBack",    "outInBack",
     "inBounce",  "outBounce",  "inOutBounce",  "outInBounce",
 ]
+
+# wm_action() 可接受的字串常數；m_task: / w_app: / m_app: 為前綴形式
+WM_TAP_ACTIONS: list[str] = [
+    "sw_start_stop", "sw_reset",
+    "media_next", "media_prev", "media_play", "media_pause", "media_play_pause",
+    "vol_up", "vol_down",
+    "m_update_weather", "m_task:",
+    "color_switch_next", "color_switch_prev", "color_switch_select",
+    "tap_launcher",
+    "widget_weather", "widget_health", "widget_calendar",
+    "w_app:", "m_app:",
+]
+
+# wm_anim_set() 第二引數可接受的欄位名稱
+WM_ANIM_FIELDS: list[str] = ["anim_in", "dur_in", "anim_out", "dur_out"]
 
 
 # ── 語法檢查 ─────────────────────────────────────────────────────────────────
@@ -677,6 +689,56 @@ class LuaEditorPanel(QWidget):
             self._popup.hide()
             return
 
+        btxt_to = btxt[:pos]
+
+        # tweens.* 動態補全：偵測 tweens.<prefix>
+        tw_m = re.search(r"tweens\.(\w*)\Z", btxt_to)
+        if tw_m:
+            prefix = tw_m.group(1)
+            names = [n for n in get_tween_names() if n.startswith(prefix)]
+            if names:
+                self._comp_mode  = "tweens"
+                self._comp_start = tw_m.start(1)
+                self._popup.show_at(
+                    self._edit.viewport().mapToGlobal(
+                        self._edit.cursorRect().bottomLeft()), names)
+                return
+            self._popup.hide()
+            return
+
+        # wm_action() 字串引數補全：偵測游標在開頭引號後
+        act_m = re.search(r"wm_action\(\s*['\"]([^'\"]*)\Z", btxt_to)
+        if act_m:
+            prefix = act_m.group(1)
+            cands = [a for a in WM_TAP_ACTIONS
+                     if a.lower().startswith(prefix.lower())][:15]
+            if cands:
+                self._comp_mode  = "string_arg"
+                self._comp_start = act_m.start(1)
+                self._popup.show_at(
+                    self._edit.viewport().mapToGlobal(
+                        self._edit.cursorRect().bottomLeft()), cands)
+                return
+            self._popup.hide()
+            return
+
+        # wm_anim_set() 第二引數補全：偵測第二個字串引數的開頭引號後
+        anim_m = re.search(
+            r"wm_anim_set\(\s*['\"][^'\"]*['\"],\s*['\"]([^'\"]*)\Z", btxt_to)
+        if anim_m:
+            prefix = anim_m.group(1)
+            cands = [f for f in WM_ANIM_FIELDS
+                     if f.lower().startswith(prefix.lower())]
+            if cands:
+                self._comp_mode  = "string_arg"
+                self._comp_start = anim_m.start(1)
+                self._popup.show_at(
+                    self._edit.viewport().mapToGlobal(
+                        self._edit.cursorRect().bottomLeft()), cands)
+                return
+            self._popup.hide()
+            return
+
         # Tag 補全：找最近的未閉合 {
         tag_start = -1
         for k in range(pos - 1, -1, -1):
@@ -718,6 +780,11 @@ class LuaEditorPanel(QWidget):
         pos = cur.positionInBlock()
         bp  = cur.block().position()
         if self._comp_mode == "tag":
+            cur.setPosition(bp + self._comp_start)
+            cur.setPosition(bp + pos, QTextCursor.MoveMode.KeepAnchor)
+            cur.insertText(text)
+        elif self._comp_mode in ("string_arg", "tweens"):
+            # 替換 comp_start 至游標之間的已輸入前綴，不加引號或括號
             cur.setPosition(bp + self._comp_start)
             cur.setPosition(bp + pos, QTextCursor.MoveMode.KeepAnchor)
             cur.insertText(text)
@@ -1313,6 +1380,11 @@ class LuaScriptPanel(QWidget):
     def _on_apply(self):
         text = self._editor.get_text()
         self._last_applied = text
+        if not self._expression_mode:
+            from components.utils import run_base_script_extract, set_base_script_data
+            vars_dict, tween_names = run_base_script_extract(
+                text, tuple(WM_API_NAMES))
+            set_base_script_data(vars_dict, tween_names)
         self.script_committed.emit(text)
         self._header.show_applied()
 

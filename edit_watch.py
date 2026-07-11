@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 
 from special_ui import AttrFlowLayout, FlowLayout, WidgetManager
 from special_ux import DragManager, accept_drop, drag_data
-from components.layers import CanvasGroupLayer, LayerEllipseItem, LayerMixin, LayeredGraphicsScene, TextLayer
+from components.layers import CanvasGroupLayer, CurvedTextLayer, ImageCondLayer, ImageLayer, LayerEllipseItem, LayerMixin, LayeredGraphicsScene, MarkerLayer, RoundedRectangleLayer, ShapeLayer, SlideshowLayer, TachymeterLayer, TextLayer, TextRingLayer
 from components.utils import to_float
 import components.attributes as _attrs
 import components.common as _common
@@ -1161,7 +1161,7 @@ def _schema_type(schema) -> str:
     if schema == "script":        return "script"
     if schema == "bool":          return "bool"
     if schema == "color":         return "color"
-    if schema in ("font", "file"): return schema
+    if schema in ("font", "file", "files"): return schema
     if isinstance(schema, list):  return "combo"
     if isinstance(schema, tuple) and len(schema) == 3:
         return "range_slider" if schema[2] == 1 else "range_input"
@@ -1380,7 +1380,10 @@ class _AttrFieldWidget(QWidget):
                     spin.setFixedWidth(84)
                 h.addWidget(spin)
             else:
-                edit = QLineEdit(str(cur))
+                # value 可能是 Lua 表達式字串（例如 tag 運算式），int() 轉換會失敗；
+                # 此時應原樣顯示表達式文字，而非退回 cur（會讓表達式被靜默捨棄）。
+                edit_text = value if isinstance(value, str) and value.strip() else str(cur)
+                edit = QLineEdit(edit_text)
                 edit.setFixedWidth(90)
                 edit.setStyleSheet(_INPUT_QSS)
                 edit.textChanged.connect(
@@ -1454,6 +1457,36 @@ class _AttrFieldWidget(QWidget):
                 if path:
                     edit.setText(path)
                     self._on_commit(path)
+            btn.clicked.connect(_browse)
+            h.addWidget(edit)
+            h.addWidget(btn)
+            return container
+
+        if schema == "files":
+            container = QWidget()
+            h = QHBoxLayout(container)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(6)
+            edit = QLineEdit(str(value) if value else "")
+            edit.setFixedWidth(120)
+            edit.setStyleSheet(_INPUT_QSS)
+            edit.setPlaceholderText("path1,path2,...")
+            edit.textChanged.connect(
+                lambda t: None if self._in_set_value else self.value_changed.emit(name, t))
+            edit.editingFinished.connect(lambda: self._on_commit(edit.text()))
+            self._set_value_fn = lambda v: edit.setText(str(v))
+            btn = QPushButton("Add")
+            btn.setFixedWidth(58)
+            btn.setStyleSheet(_BTN_QSS)
+            btn.setToolTip("Add photo(s) — appended to the existing list")
+
+            def _browse():
+                paths, _ = QFileDialog.getOpenFileNames(btn, "Select Photos")
+                if paths:
+                    existing = edit.text().strip()
+                    combined = ",".join([existing, *paths]) if existing else ",".join(paths)
+                    edit.setText(combined)
+                    self._on_commit(combined)
             btn.clicked.connect(_browse)
             h.addWidget(edit)
             h.addWidget(btn)
@@ -1678,7 +1711,7 @@ class _EditCanvas(QGraphicsView):
             self._place_object(data, pos)
         event.acceptProposedAction()
 
-    def _place_from_values(self, object_name: str, values: dict) -> "TextLayer | LayerEllipseItem | None":
+    def _place_from_values(self, object_name: str, values: dict) -> "TextLayer | ImageLayer | ImageCondLayer | ShapeLayer | MarkerLayer | TachymeterLayer | SlideshowLayer | RoundedRectangleLayer | CurvedTextLayer | TextRingLayer | LayerEllipseItem | None":
         obj = getattr(_attrs, object_name, None)
         layer_type = "baseLayer"
         if isinstance(obj, list) and obj and isinstance(obj[0], dict):
@@ -1686,6 +1719,56 @@ class _EditCanvas(QGraphicsView):
         if layer_type == "textLayer":
             item = TextLayer(values)
             self._scene.addItem(item)
+            item._refresh_color()
+            item._refresh_display()
+            return item
+        if layer_type == "imageLayer":
+            item = ImageLayer(values)
+            self._scene.addItem(item)
+            item._refresh_display()
+            return item
+        if layer_type == "imageCondLayer":
+            item = ImageCondLayer(values)
+            self._scene.addItem(item)
+            item._refresh_display()
+            return item
+        if layer_type == "shapeLayer":
+            item = ShapeLayer(values)
+            self._scene.addItem(item)
+            item._refresh_display()
+            return item
+        if layer_type == "markerLayer":
+            item = MarkerLayer(values)
+            self._scene.addItem(item)
+            item._refresh_display()
+            return item
+        if layer_type == "tachymeterLayer":
+            item = TachymeterLayer(values)
+            self._scene.addItem(item)
+            item._refresh_color()
+            item._refresh_display()
+            return item
+        if layer_type == "slideshowLayer":
+            item = SlideshowLayer(values)
+            self._scene.addItem(item)
+            item._refresh_display()
+            return item
+        if layer_type == "roundedRectangleLayer":
+            item = RoundedRectangleLayer(values)
+            self._scene.addItem(item)
+            item._refresh_display()
+            return item
+        if layer_type == "curvedTextLayer":
+            item = CurvedTextLayer(values)
+            self._scene.addItem(item)
+            item._refresh_color()
+            item._refresh_display()
+            return item
+        if layer_type == "textRingLayer":
+            item = TextRingLayer(values)
+            self._scene.addItem(item)
+            item._refresh_color()
+            item._refresh_display()
             return item
         x = to_float(values.get("X", 0))
         y = to_float(values.get("Y", 0))
@@ -2896,6 +2979,7 @@ class PanelWidgetManager(WidgetManager):
         sys.excepthook = _crash_hook
 
         self.attr_changed.connect(self._on_watch_setting_changed)
+        self.dark_mode_changed.connect(lambda _: self.refresh_all_instances())
         QTimer.singleShot(0, self._sync_initial_watch_name)
 
         # 每秒以最新時間 tag 值重算所有 canvas item（有來源 tag 自動刷新）
@@ -3039,12 +3123,18 @@ class PanelWidgetManager(WidgetManager):
         else:
             obj_type = self._current_object_type
             if not obj_type:
-                return
-            old_val = self._type_defaults.get(obj_type, {}).get(field, "")
-            self._type_defaults.setdefault(obj_type, {})[field] = new_value
-            self._attr_panel.update_field(field, new_value)
-            self.undo_stack.push(
-                _TemplateAttrChangeCommand(self, obj_type, field, old_val, new_value))
+                # watchSetting 模式（deselected 狀態顯示 base layer 欄位）
+                old_val = self._watch_settings.get(field, "")
+                self._watch_settings[field] = new_value
+                self._attr_panel.update_field(field, new_value)
+                self.undo_stack.push(
+                    _WatchSettingChangeCommand(self, field, old_val, new_value))
+            else:
+                old_val = self._type_defaults.get(obj_type, {}).get(field, "")
+                self._type_defaults.setdefault(obj_type, {})[field] = new_value
+                self._attr_panel.update_field(field, new_value)
+                self.undo_stack.push(
+                    _TemplateAttrChangeCommand(self, obj_type, field, old_val, new_value))
         self.lua_committed.emit()
 
     def refresh_all_instances(self) -> None:
@@ -3059,6 +3149,7 @@ class PanelWidgetManager(WidgetManager):
                 continue
             for field, value in inst["values"].items():
                 ci.apply_attr(field, value)
+            ci.tick()
 
         canvas = getattr(getattr(self, "_edit_view", None), "_canvas", None)
         if canvas is None:

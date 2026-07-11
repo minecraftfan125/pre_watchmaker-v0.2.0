@@ -11,7 +11,7 @@ from edit_watch import (
     PanelWidgetManager,
     _AttrFieldWidget,
 )
-from components.layers import LayerEllipseItem, LayerMixin
+from components.layers import ImageLayer, LayerEllipseItem, LayerMixin
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -87,9 +87,10 @@ class TestPlaceObject:
         mgr.place_object("watchBackground")
         assert mgr._instances[0]["object_type"] == "watchBackground"
 
-    def test_canvas_item_is_layer_ellipse(self, mgr):
+    def test_canvas_item_is_image_layer(self, mgr):
+        """watchBackground 的 TYPE 為 imageLayer，canvas item 應為真正的 ImageLayer。"""
         mgr.place_object("watchBackground")
-        assert isinstance(_layer_items(mgr)[0], LayerEllipseItem)
+        assert isinstance(_layer_items(mgr)[0], ImageLayer)
 
     def test_template_mode_uses_saved_defaults(self, mgr):
         """Template 模式顯示同型別且有 _type_defaults 時，place 沿用已儲存的值。"""
@@ -425,7 +426,7 @@ class TestInstanceAttrChangeCommand:
         canvas_item.apply_attr("X", 50)
         mgr._attr_panel._on_field_committed("X", 0, 50)
         mgr.undo_stack.undo()
-        assert abs(canvas_item.rect().center().x() - 0) < 1e-3
+        assert abs(canvas_item._x - 0) < 1e-3
 
     def test_redo_reapplies_canvas_x_position(self, placed):
         mgr, iid = placed
@@ -434,7 +435,7 @@ class TestInstanceAttrChangeCommand:
         mgr._attr_panel._on_field_committed("X", 0, 50)
         mgr.undo_stack.undo()
         mgr.undo_stack.redo()
-        assert abs(canvas_item.rect().center().x() - 50) < 1e-3
+        assert abs(canvas_item._x - 50) < 1e-3
 
     def test_name_commit_updates_tree_text(self, placed):
         mgr, iid = placed

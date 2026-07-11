@@ -4,7 +4,19 @@ A desktop application for creating and editing WatchMaker watch faces, built wit
 
 ## Features
 
-### Current Version (v0.3.7)
+### Current Version (v0.4.0)
+
+#### Canvas Layer Types
+- **Fully Rendered Layers**: `ImageLayer`, `ImageCondLayer` (sprite/conditional images), `ShapeLayer` (square/circle/triangle/pentagon/hexagon/star/heart), `RoundedRectangleLayer`, `CurvedTextLayer`, `TextRingLayer` (Numbers dial), `MarkerLayer` (freeform marker dials), `TachymeterLayer`, and `SlideshowLayer` all now render live on the canvas instead of falling back to a generic placeholder
+- **Tachymeter Layer**: real tachymeter speed-scale geometry (`angle = 21600 / speed`), major/minor tick marks with independent size/shape presets (Tiny–XLarge, Circle, Triangle), curved title text in the scale's start/end gap, and a `Custom speeds` field for user-defined speed lists
+- **Slideshow Layer**: multi-photo cycling driven by a new per-second `LayerMixin.tick()` hook, a `Photo` field that now accepts a comma-separated list of paths (append-on-browse multi-file picker), and `Photo clip` (None/Circle/Corner 1/Corner 2) with crop-fill scaling so photo content is never distorted
+- **Schema Cleanup**: `Display` mode, `Shape`, `Ring type`, and other previously single-option placeholder enums are now fully populated across layer types
+
+#### Lua Sandbox & Base Script Support
+- **Execution Sandbox**: dangerous globals (`io`, `os`, `debug`, `package`, `require`, the `python` bridge, etc.) are stripped before any user Lua runs
+- **Timeout Watchdog**: a `debug.sethook`-based deadline aborts runaway/infinite Lua expressions and base-script extraction within a bounded time, returning a safe fallback instead of hanging the editor
+- **Base Script Variables**: `var_*` globals and `tween` names defined in the Lua base script are now extracted and usable directly in per-field expressions
+- **Editor Autocomplete**: added `tweens.*`, `wm_action()` string-argument, and `wm_anim_set()` second-argument completion
 
 #### Watch Face Editor
 - **Canvas**: Circular watch face preview with real-time layer rendering
@@ -46,6 +58,7 @@ A desktop application for creating and editing WatchMaker watch faces, built wit
 ---
 
 ### Planned Features
+- **3D layer rendering** (`layer3D`/Photo Cube, `model3d`) — next release's main focus
 - Animation attribute support
 - Full WatchMaker `.pxml` import/export
 - Watch face preview on-device sync
@@ -116,9 +129,12 @@ pre_watchmaker/
 ├── components/
 │   ├── common.py         # Field type schemas for each layer type
 │   ├── attributes.py     # Default values for each layer type
-│   ├── utils.py          # summon_components(), Lua eval system, Tag system
-│   └── layers.py         # LayerMixin, LayeredGraphicsScene, TextLayer, LayerEllipseItem,
-│                         #   CanvasGroupLayer, _SelectionOverlay, _MultiSelectOverlay
+│   ├── utils.py          # summon_components(), Lua eval system (sandbox + timeout), Tag system, base script vars
+│   └── layers.py         # LayerMixin, LayeredGraphicsScene, TextLayer/ImageLayer/ImageCondLayer/ShapeLayer/
+│                         #   RoundedRectangleLayer/CurvedTextLayer/TextRingLayer/MarkerLayer/TachymeterLayer/
+│                         #   SlideshowLayer, LayerEllipseItem, CanvasGroupLayer,
+│                         #   _SelectionOverlay, _MultiSelectOverlay
+├── lua/                  # wm_api.lua (WatchMaker API stubs), wm_sandbox.lua (dangerous-global blocklist)
 ├── saves/                # Saved watch faces (sort.json + preview .png per watch)
 ├── img/
 │   ├── icon/             # TabWidgetManager DropOverlay direction icons
@@ -133,6 +149,18 @@ pre_watchmaker/
 This project is currently in development.
 
 ## Changelog
+
+### v0.4.0
+- **Canvas Rendering for Stub Layer Types**: `ImageLayer`, `ImageCondLayer`, `ShapeLayer`, `RoundedRectangleLayer`, `CurvedTextLayer`, `TextRingLayer`, `MarkerLayer`, `TachymeterLayer`, and `SlideshowLayer` all gained real canvas rendering (previously schema-only or a generic placeholder circle)
+- **Tachymeter Layer**: non-linear speed-scale geometry, major/minor tick marks with size/shape presets, curved title text, `Custom speeds` field
+- **Slideshow Layer**: multi-photo cycling via a new `LayerMixin.tick()` per-second hook, multi-file `Photo` field (comma-separated, append-on-browse), `Photo clip` shapes (Circle/Corner 1/Corner 2) with crop-fill scaling
+- **Schema Enum Completion**: `Display`, `Shape`, `Ring type`, `Major/Minor markers`, and other previously single-option stub fields now expose their full real option sets
+- **Lua Sandbox**: blocks dangerous globals (`io`/`os`/`debug`/`package`/`require`/Python bridge) before running any user Lua
+- **Lua Timeout Watchdog**: `debug.sethook`-based deadline aborts runaway/infinite Lua expressions and base-script extraction instead of hanging the editor
+- **Base Script Variables**: `var_*` globals and `tween` names from the Lua base script are extracted and usable in per-field expressions
+- **Lua Editor Autocomplete**: added `tweens.*`, `wm_action()` string-argument, and `wm_anim_set()` second-argument completion
+- **Bug Fixes**: Lua expression text no longer silently discarded in numeric fields; Watch Setting vs. per-type Template attribute edits now route to distinct undo commands; day/night mode toggle now forces a full canvas refresh
+- **Test Infrastructure**: added `test_lua_sandbox.py`/`test_lua_timeout.py`; shared `conftest.py` fixture disables the periodic refresh timer to eliminate test flakiness
 
 ### v0.3.7
 - **Refactored to PyQt6**: Migrated the entire codebase from PyQt5 to PyQt6; updated all imports, signal/slot syntax, enum namespaces, and stylesheet handling accordingly

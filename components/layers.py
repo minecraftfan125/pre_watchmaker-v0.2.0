@@ -7,7 +7,7 @@ import math
 
 from PyQt6.QtCore import Qt, QRectF, QPointF, QSizeF
 from .utils import to_float, to_str
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainterPath, QPen, QTransform
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QPixmap, QTransform
 from PyQt6.QtWidgets import QGraphicsEllipseItem, QGraphicsItem, QGraphicsRectItem, QGraphicsScene, QGraphicsTextItem
 
 _NON_LAYER_Z: float = 1e8
@@ -17,6 +17,85 @@ _GIT_STATE_RGBA: dict[str, int] = {
     "modify": 0x26FFAB91,
     "delete": 0x26EF9A9A,
 }
+
+
+def _parse_hex_color(value) -> QColor:
+    """將 hex 字串（可含 #、可為 None）轉為 QColor；無效時退回白色。"""
+    s = str(value or "").strip().lstrip("#")
+    color = QColor(f"#{s}")
+    return color if color.isValid() else QColor(Qt.GlobalColor.white)
+
+
+def _scale_and_tint(src: QPixmap, w: int, h: int, tint_hex) -> QPixmap:
+    """依 w/h 縮放 src，並選擇性套用 tint（乘色）；src 為 null 時回傳 null pixmap。"""
+    if src.isNull():
+        return QPixmap()
+    scaled = src.scaled(
+        max(1, w), max(1, h),
+        Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+    tint = str(tint_hex or "").strip().lstrip("#")
+    tint_color = QColor(f"#{tint}") if tint else None
+    if tint_color is None or not tint_color.isValid():
+        return scaled
+
+    result = QPixmap(scaled.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.drawPixmap(0, 0, scaled)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
+    painter.fillRect(result.rect(), tint_color)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+    painter.drawPixmap(0, 0, scaled)
+    painter.end()
+    return result
+
+
+def _scale_crop_fill(src: QPixmap, w: int, h: int) -> QPixmap:
+    """依 w/h 裁切式縮放 src（KeepAspectRatioByExpanding 後置中裁切至精確 w×h)，
+    避免內容因拉伸而變形；src 為 null 時回傳 null pixmap。
+    """
+    if src.isNull():
+        return QPixmap()
+    w, h = max(1, w), max(1, h)
+    scaled = src.scaled(
+        w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+    x = max(0, (scaled.width() - w) // 2)
+    y = max(0, (scaled.height() - h) // 2)
+    return scaled.copy(x, y, w, h)
+
+
+# Photo clip 圓角比例（相對於 min(w, h)）
+_PHOTO_CLIP_CORNER_RATIO: dict[str, float] = {
+    "Corner 1": 0.15,
+    "Corner 2": 0.30,
+}
+
+
+def _clip_pixmap(src: QPixmap, w: int, h: int, clip: str) -> QPixmap:
+    """依 Photo clip 選項（None/Circle/Corner 1/Corner 2）裁切 src 為對應形狀，
+    形狀外部變透明；"None" 或未知值直接回傳原圖（不裁切）。src 為 null 時回傳 null pixmap。
+    """
+    if src.isNull() or not clip or clip == "None":
+        return src
+    path = QPainterPath()
+    if clip == "Circle":
+        path.addEllipse(0, 0, w, h)
+    elif clip in _PHOTO_CLIP_CORNER_RATIO:
+        r = min(w, h) * _PHOTO_CLIP_CORNER_RATIO[clip]
+        r = min(r, min(w, h) / 2.0)
+        path.addRoundedRect(QRectF(0, 0, w, h), r, r)
+    else:
+        return src
+
+    result = QPixmap(w, h)
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setClipPath(path)
+    painter.drawPixmap(0, 0, src)
+    painter.end()
+    return result
 
 
 class LayerMixin:
@@ -71,13 +150,64 @@ class LayerMixin:
         if m is not None:
             m.attr_changed.connect(slot)
 
+    def _refresh_display(self) -> None:
+        """依 self._display 與 manager.is_dark_mode 決定是否顯示。
+        建構當下尚未加入 scene，manager 會是 None，此時先視為亮屏；
+        待加入 scene 後 _place_from_values 會再呼叫一次以套用實際模式。
+        """
+        manager = self._get_manager()
+        is_dark = bool(manager.is_dark_mode) if manager is not None else False
+        display = self._display  # type: ignore[attr-defined]
+        if display == "Never":
+            self.setVisible(False)  # type: ignore[attr-defined]
+        elif display == "Bright only":
+            self.setVisible(not is_dark)  # type: ignore[attr-defined]
+        elif display == "Dimmed only":
+            self.setVisible(is_dark)  # type: ignore[attr-defined]
+        else:
+            self.setVisible(True)  # type: ignore[attr-defined]
+
     def apply_attr(self, field: str, value) -> None:
         """子類覆寫以處理屬性變更的視覺更新。"""
         pass
 
+    def tick(self) -> None:
+        """每秒由 PanelWidgetManager.refresh_all_instances() 呼叫一次，供需要自主動畫
+        （如 SlideshowLayer 輪播）的子類覆寫；預設不做任何事。"""
+        pass
+
     def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
                            base_vals: dict) -> dict:
-        """以 base_vals 為起點套用縮放，回傳更新後的 field→value dict。子類覆寫。"""
+        """以 base_vals 為起點套用縮放，回傳更新後的 field→value dict。子類覆寫（供多選縮放使用）。"""
+        return {}
+
+    # ── 單選 _SelectionOverlay 拖曳縮放用的泛型 hook ────────────────────────────
+    # 不同圖層的「縮放」語意不同：TextLayer 用 Anim scale 百分比（字體本身不變），
+    # ImageLayer 直接改 Width/Height 像素值。以下 hook 讓 _SelectionOverlay 的
+    # 拖曳幾何運算保持通用，實際欄位語意交給子類決定。
+
+    def scale_geom(self) -> tuple[float, float]:
+        """回傳縮放拖曳基準用的『內在』寬高（未受目前縮放百分比影響）。預設為 boundingRect。"""
+        br = self.boundingRect()  # type: ignore[attr-defined]
+        return br.width(), br.height()
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        """回傳目前縮放百分比（相對 scale_geom()）。預設 100%（無獨立縮放百分比概念）。"""
+        return 100.0, 100.0
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        """回傳實際會套用的縮放百分比（依子類欄位範圍夾合），供 overlay 在套用前算出正確錨點位置。"""
+        return sx_pct, sy_pct
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        """套用單選拖曳縮放的絕對目標值，回傳實際套用的 field→value dict。子類覆寫。"""
+        return {}
+
+    def scale_result_values(self) -> dict:
+        """回傳目前 X/Y/Rotation 與縮放相關欄位的值快照，供 undo 追蹤比對。子類覆寫。"""
         return {}
 
 
@@ -285,10 +415,15 @@ class TextLayer(QGraphicsTextItem, LayerMixin):
 
         self.setPlainText(to_str(str(values.get("Text", ""))))
         self._apply_font()
-        self._apply_color(values.get("Color", "ffffff"))
+        self._color_day = values.get("Color", "ffffff")
+        self._color_dim = values.get("Color dim", "ffffff")
+        self._refresh_color()
         self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
         self._layer_value = int(to_float(values.get("Layer", 0)))
         self._apply_transform()
+
+        self._display = str(values.get("Display", "Always"))
+        self._refresh_display()
 
     # ── 內部工具 ──────────────────────────────────────────────────────────────
 
@@ -301,9 +436,16 @@ class TextLayer(QGraphicsTextItem, LayerMixin):
         self.setFont(font)
 
     def _apply_color(self, hex_val) -> None:
-        s = str(hex_val).strip().lstrip("#")
-        color = QColor(f"#{s}") if QColor(f"#{s}").isValid() else QColor(Qt.GlobalColor.white)
-        self.setDefaultTextColor(color)
+        self.setDefaultTextColor(_parse_hex_color(hex_val))
+
+    def _refresh_color(self) -> None:
+        """依 manager.is_dark_mode 決定顯示 Color（day）或 Color dim（night）。
+        建構當下尚未加入 scene，manager 會是 None，此時先以 day color 顯示，
+        待 _place_from_values 加入 scene 後會再呼叫一次以套用實際模式。
+        """
+        manager = self._get_manager()
+        is_night = bool(manager.is_dark_mode) if manager is not None else False
+        self._apply_color(self._color_dim if is_night else self._color_day)
 
     def _apply_transform(self) -> None:
         """變換矩陣順序：傾斜 → 對齊 → 縮放 → 旋轉。
@@ -358,7 +500,11 @@ class TextLayer(QGraphicsTextItem, LayerMixin):
             self._apply_font()
             self._apply_transform()
         elif field == "Color":
-            self._apply_color(value)
+            self._color_day = value
+            self._refresh_color()
+        elif field == "Color dim":
+            self._color_dim = value
+            self._refresh_color()
         elif field == "Rotation":
             self._rotation = to_float(value)
             self._apply_transform()
@@ -376,6 +522,9 @@ class TextLayer(QGraphicsTextItem, LayerMixin):
             self._apply_transform()
         elif field == "Opacity":
             self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
         elif field == "Layer":
             self.set_layer_value(int(to_float(value)))
 
@@ -394,6 +543,2487 @@ class TextLayer(QGraphicsTextItem, LayerMixin):
         for field, val in result.items():
             self.apply_attr(field, val)
         return result
+
+    # ── 單選拖曳縮放 hook（Anim scale 百分比語意）───────────────────────────────
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return self._anim_scale_x, self._anim_scale_y
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = max(-2048.0, min(2048.0, sx_pct))
+        csy = max(-2048.0, min(2048.0, sy_pct))
+        if csx == 0:
+            csx = 1.0 if sx_pct >= 0 else -1.0
+        if csy == 0:
+            csy = 1.0 if sy_pct >= 0 else -1.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_sx = int(round(max(-2048.0, min(2048.0, new_sx_pct))))
+        new_sy = int(round(max(-2048.0, min(2048.0, new_sy_pct))))
+        if new_sx == 0:
+            new_sx = 1 if new_sx_pct >= 0 else -1
+        if new_sy == 0:
+            new_sy = 1 if new_sy_pct >= 0 else -1
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Anim scale X", new_sx)
+        self.apply_attr("Anim scale Y", new_sy)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Anim scale X": new_sx, "Anim scale Y": new_sy, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Anim scale X": self._anim_scale_x, "Anim scale Y": self._anim_scale_y,
+        }
+
+
+class CurvedTextLayer(QGraphicsItem, LayerMixin):
+    """
+    繼承 LayerMixin 的圓弧文字 item。
+    X/Y 為圓心；文字依 Radius 沿圓周排列，Direction 決定彎曲方向：
+    "Up" 為圓心上方弧線（字頂朝外，類似拱形招牌）；"Down" 為圓心下方弧線（字頂朝內，類似徽章下緣文字）。
+    文字永遠由左至右沿弧排列；Alignment 依水平分量分三組：
+    *left → 文字起點對齊 Direction 錨點角度；*right → 文字終點對齊；其餘（含 Center）置中對齊。
+    """
+
+    _H_GROUP: dict[str, str] = {
+        "Top left": "left", "Center left": "left", "Bottom left": "left",
+        "Center": "center", "Top center": "center", "Bottom center": "center",
+        "Top right": "right", "Center right": "right", "Bottom right": "right",
+    }
+
+    def __init__(self, values: dict, parent=None):
+        super().__init__(parent)
+        self.__init_layer__()
+        self.can_scale = True
+
+        self._x            = to_float(values.get("X", 0))
+        self._y            = to_float(values.get("Y", 0))
+        self._radius        = max(1.0, to_float(values.get("Radius", 200), 200.0))
+        self._direction     = str(values.get("Direction", "Up"))
+        self._alignment     = str(values.get("Alignment", "Center"))
+        self._font_name     = str(values.get("Font", ""))
+        self._font_size     = int(to_float(values.get("Text size", 40), 40.0))
+        self._rotation      = to_float(values.get("Rotation", 0))
+        self._skew_x        = to_float(values.get("Skew X", 0))
+        self._skew_y        = to_float(values.get("Skew Y", 0))
+        self._anim_scale_x  = to_float(values.get("Anim scale X", 100), 100.0)
+        self._anim_scale_y  = to_float(values.get("Anim scale Y", 100), 100.0)
+        self._text          = to_str(str(values.get("Text", "")))
+        self._color_day     = values.get("Color", "ffffff")
+        self._color_dim     = values.get("Color dim", "ffffff")
+        self._display       = str(values.get("Display", "Always"))
+
+        self._font = QFont()
+        self._brush_color = QColor(Qt.GlobalColor.white)
+        self._chars: list[tuple[str, float, float, float, float]] = []  # (char, cx, cy, rot_deg, width)
+        self._bounding_rect = QRectF()
+
+        self._apply_font()
+        self._refresh_color()
+        self._rebuild_layout()
+
+        self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
+        self._layer_value = int(to_float(values.get("Layer", 0)))
+        self._apply_transform()
+        self._refresh_display()
+
+    # ── 內部工具 ──────────────────────────────────────────────────────────────
+
+    def _apply_font(self) -> None:
+        # 延遲匯入避免 components → special_ui 的循環依賴
+        from special_ui import FontManager
+        family = FontManager().get_font_family(self._font_name) or self._font_name
+        font = QFont(family)
+        font.setPixelSize(self._font_size)
+        self._font = font
+
+    def _apply_color(self, hex_val) -> None:
+        self._brush_color = _parse_hex_color(hex_val)
+        self.update()
+
+    def _refresh_color(self) -> None:
+        """依 manager.is_dark_mode 決定顯示 Color（day）或 Color dim（night）。"""
+        manager = self._get_manager()
+        is_night = bool(manager.is_dark_mode) if manager is not None else False
+        self._apply_color(self._color_dim if is_night else self._color_day)
+
+    def _rebuild_layout(self) -> None:
+        """依 Text/Font/Text size/Radius/Direction/Alignment 重新計算每個字元沿圓弧的
+        位置與旋轉角，並算出精確 boundingRect（原點＝圓心，未套用 Rotation/Skew/Anim scale）。
+        角度慣例：0°＝三點鐘方向，正值順時針；-90°＝圓心正上方，+90°＝圓心正下方。
+        """
+        fm = QFontMetricsF(self._font)
+        text = self._text
+        widths = [fm.horizontalAdvance(ch) for ch in text]
+        radius = self._radius
+        total_width = sum(widths)
+        total_angle = (total_width / radius) if radius > 0 else 0.0
+
+        is_up = self._direction != "Down"
+        anchor_angle = math.radians(-90.0 if is_up else 90.0)
+        dir_sign = 1.0 if is_up else -1.0
+
+        h_group = self._H_GROUP.get(self._alignment, "center")
+        if h_group == "left":
+            start_angle = anchor_angle
+        elif h_group == "right":
+            start_angle = anchor_angle - dir_sign * total_angle
+        else:
+            start_angle = anchor_angle - dir_sign * total_angle / 2.0
+
+        ascent, descent = fm.ascent(), fm.descent()
+        chars: list[tuple[str, float, float, float, float]] = []
+        bounds = QRectF()
+        running = start_angle
+        for ch, w in zip(text, widths):
+            span = (w / radius) if radius > 0 else 0.0
+            center_angle = running + dir_sign * span / 2.0
+            running += dir_sign * span
+
+            cx = radius * math.cos(center_angle)
+            cy = radius * math.sin(center_angle)
+            angle_deg = math.degrees(center_angle)
+            rot_deg = angle_deg + 90.0 if is_up else angle_deg - 90.0
+            chars.append((ch, cx, cy, rot_deg, w))
+
+            t = QTransform()
+            t.translate(cx, cy)
+            t.rotate(rot_deg)
+            local_rect = QRectF(-w / 2.0, -ascent, w, ascent + descent)
+            bounds = bounds.united(t.mapRect(local_rect))
+
+        self._chars = chars
+        self._bounding_rect = bounds
+
+    def _apply_transform(self) -> None:
+        """縮放/旋轉/傾斜一律以圓心（局部原點）為軸，最後平移至 (X,Y)。"""
+        sx = self._anim_scale_x / 100.0
+        sy = self._anim_scale_y / 100.0
+        sh_x = math.tan(math.radians(self._skew_x))
+        sh_y = math.tan(math.radians(self._skew_y))
+
+        t = QTransform()
+        t.translate(self._x, self._y)
+        t.rotate(self._rotation)
+        t.scale(sx, sy)
+        t.shear(sh_x, sh_y)
+        self.setTransform(t)
+
+    # ── QGraphicsItem 必要覆寫 ────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        return self._bounding_rect
+
+    def paint(self, painter, option, widget=None) -> None:
+        if not self._chars:
+            return
+        painter.setFont(self._font)
+        painter.setPen(QPen(self._brush_color))
+        for ch, cx, cy, rot_deg, w in self._chars:
+            if ch.isspace():
+                continue
+            painter.save()
+            painter.translate(cx, cy)
+            painter.rotate(rot_deg)
+            fm = painter.fontMetrics()
+            rect = QRectF(-w / 2.0, -fm.ascent(), w, fm.ascent() + fm.descent())
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, ch)
+            painter.restore()
+
+    # ── LayerMixin 覆寫 ────────────────────────────────────────────────────────
+
+    def apply_attr(self, field: str, value) -> None:
+        if field in ("Text", "Radius", "Direction", "Alignment"):
+            self.prepareGeometryChange()
+            if field == "Text":
+                self._text = to_str(str(value))
+            elif field == "Radius":
+                self._radius = max(1.0, to_float(value, self._radius))
+            elif field == "Direction":
+                self._direction = str(value)
+            elif field == "Alignment":
+                self._alignment = str(value)
+            self._rebuild_layout()
+        elif field == "X":
+            self._x = to_float(value)
+            self._apply_transform()
+        elif field == "Y":
+            self._y = to_float(value)
+            self._apply_transform()
+        elif field == "Font":
+            self._font_name = str(value)
+            self._apply_font()
+            self.prepareGeometryChange()
+            self._rebuild_layout()
+        elif field == "Text size":
+            self._font_size = int(to_float(value, self._font_size))
+            self._apply_font()
+            self.prepareGeometryChange()
+            self._rebuild_layout()
+        elif field == "Color":
+            self._color_day = value
+            self._refresh_color()
+        elif field == "Color dim":
+            self._color_dim = value
+            self._refresh_color()
+        elif field == "Rotation":
+            self._rotation = to_float(value)
+            self._apply_transform()
+        elif field == "Skew X":
+            self._skew_x = to_float(value)
+            self._apply_transform()
+        elif field == "Skew Y":
+            self._skew_y = to_float(value)
+            self._apply_transform()
+        elif field == "Anim scale X":
+            self._anim_scale_x = to_float(value, self._anim_scale_x)
+            self._apply_transform()
+        elif field == "Anim scale Y":
+            self._anim_scale_y = to_float(value, self._anim_scale_y)
+            self._apply_transform()
+        elif field == "Opacity":
+            self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
+        elif field == "Layer":
+            self.set_layer_value(int(to_float(value)))
+
+    def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
+                           base_vals: dict) -> dict:
+        new_anim_sx = float(base_vals.get("Anim scale X", self._anim_scale_x)) * sx
+        new_anim_sy = float(base_vals.get("Anim scale Y", self._anim_scale_y)) * sy
+        new_x = pivot_x + (float(base_vals.get("X", self._x)) - pivot_x) * sx
+        new_y = pivot_y + (float(base_vals.get("Y", self._y)) - pivot_y) * sy
+        result = {
+            "Anim scale X": int(round(max(-2048.0, min(2048.0, new_anim_sx)))),
+            "Anim scale Y": int(round(max(-2048.0, min(2048.0, new_anim_sy)))),
+            "X": int(round(max(-1280.0, min(1280.0, new_x)))),
+            "Y": int(round(max(-1280.0, min(1280.0, new_y)))),
+        }
+        for field, val in result.items():
+            self.apply_attr(field, val)
+        return result
+
+    # ── 單選拖曳縮放 hook（Anim scale 百分比語意）───────────────────────────────
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return self._anim_scale_x, self._anim_scale_y
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = max(-2048.0, min(2048.0, sx_pct))
+        csy = max(-2048.0, min(2048.0, sy_pct))
+        if csx == 0:
+            csx = 1.0 if sx_pct >= 0 else -1.0
+        if csy == 0:
+            csy = 1.0 if sy_pct >= 0 else -1.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_sx = int(round(max(-2048.0, min(2048.0, new_sx_pct))))
+        new_sy = int(round(max(-2048.0, min(2048.0, new_sy_pct))))
+        if new_sx == 0:
+            new_sx = 1 if new_sx_pct >= 0 else -1
+        if new_sy == 0:
+            new_sy = 1 if new_sy_pct >= 0 else -1
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Anim scale X", new_sx)
+        self.apply_attr("Anim scale Y", new_sy)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Anim scale X": new_sx, "Anim scale Y": new_sy, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Anim scale X": self._anim_scale_x, "Anim scale Y": self._anim_scale_y,
+        }
+
+
+# ── TextRingLayer（環形文字／Numbers）───────────────────────────────────────────
+
+class TextRingLayer(QGraphicsItem, LayerMixin):
+    """
+    繼承 LayerMixin 的環形文字（Numbers）item。
+    依 Ring type 產生一組標籤，等距分布於 Angle start ~ Angle end 之間
+    （角度慣例：0°＝正上方，順時針遞增）。
+    Squarify 依超橢圓公式 r(θ) = R / (|cosθ|^n + |sinθ|^n)^(1/n) 將圓形路徑往方形擠壓
+    （扁平邊固定於半徑 R，對角隨 n 增大逐漸外擴；n 隨 Squarify 1~100 由 2 遞增至 12）。
+    Show every／Hide text 依 1-based 原始序位篩選要顯示的項目；
+    Text rotation 決定每個標籤相對其環上位置的自轉方式；每個標籤永遠置中於其環上位置。
+    """
+
+    _ROMAN     = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"]
+    _WEEKDAY_2 = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+    _WEEKDAY_3 = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    _MONTHS    = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    _LAYOUT_FIELDS = frozenset({
+        "Ring type", "Custom start", "Custom end", "Show every", "Hide text",
+        "Angle start", "Angle end", "Squarify", "Text rotation",
+    })
+
+    def __init__(self, values: dict, parent=None):
+        super().__init__(parent)
+        self.__init_layer__()
+        self.can_scale = True
+
+        self._x             = to_float(values.get("X", 0))
+        self._y             = to_float(values.get("Y", 0))
+        self._radius        = max(1.0, to_float(values.get("Radius", 200), 200.0))
+        self._ring_type      = str(values.get("Ring type", "1-12"))
+        self._custom_start  = int(round(to_float(values.get("Custom start", 1), 1.0)))
+        self._custom_end    = int(round(to_float(values.get("Custom end", 12), 12.0)))
+        self._show_every    = max(1, int(round(to_float(values.get("Show every", 1), 1.0))))
+        self._hide_text     = str(values.get("Hide text", "") or "")
+        self._text_rotation = str(values.get("Text rotation", "Upright"))
+        self._angle_start   = to_float(values.get("Angle start", 0))
+        self._angle_end     = to_float(values.get("Angle end", 360))
+        self._squarify      = max(1.0, min(100.0, to_float(values.get("Squarify", 1), 1.0)))
+        self._font_name     = str(values.get("Font", ""))
+        self._font_size     = int(to_float(values.get("Text size", 40), 40.0))
+        self._rotation      = to_float(values.get("Rotation", 0))
+        self._skew_x        = to_float(values.get("Skew X", 0))
+        self._skew_y        = to_float(values.get("Skew Y", 0))
+        self._anim_scale_x  = to_float(values.get("Anim scale X", 100), 100.0)
+        self._anim_scale_y  = to_float(values.get("Anim scale Y", 100), 100.0)
+        self._color_day     = values.get("Color", "ffffff")
+        self._color_dim     = values.get("Color dim", "ffffff")
+        self._display       = str(values.get("Display", "Always"))
+
+        self._font = QFont()
+        self._brush_color = QColor(Qt.GlobalColor.white)
+        self._items: list[tuple[str, float, float, float, QRectF]] = []  # (text, cx, cy, rot_deg, local_rect)
+        self._bounding_rect = QRectF()
+
+        self._apply_font()
+        self._refresh_color()
+        self._rebuild_layout()
+
+        self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
+        self._layer_value = int(to_float(values.get("Layer", 0)))
+        self._apply_transform()
+        self._refresh_display()
+
+    # ── 內部工具 ──────────────────────────────────────────────────────────────
+
+    def _apply_font(self) -> None:
+        # 延遲匯入避免 components → special_ui 的循環依賴
+        from special_ui import FontManager
+        family = FontManager().get_font_family(self._font_name) or self._font_name
+        font = QFont(family)
+        font.setPixelSize(self._font_size)
+        self._font = font
+
+    def _apply_color(self, hex_val) -> None:
+        self._brush_color = _parse_hex_color(hex_val)
+        self.update()
+
+    def _refresh_color(self) -> None:
+        """依 manager.is_dark_mode 決定顯示 Color（day）或 Color dim（night）。"""
+        manager = self._get_manager()
+        is_night = bool(manager.is_dark_mode) if manager is not None else False
+        self._apply_color(self._color_dim if is_night else self._color_day)
+
+    def _generate_labels(self) -> list[str]:
+        rt = self._ring_type
+        if rt == "1-12":
+            return [str(i) for i in range(1, 13)]
+        if rt == "1-24":
+            return [str(i) for i in range(1, 25)]
+        if rt == "1-30":
+            return [str(i) for i in range(1, 31)]
+        if rt == "1-31":
+            return [str(i) for i in range(1, 32)]
+        if rt == "1-60":
+            return [str(i) for i in range(1, 61)]
+        if rt == "1-100":
+            return [str(i) for i in range(1, 101)]
+        if rt == "Custom (x to y)":
+            a, b = self._custom_start, self._custom_end
+            step = 1 if b >= a else -1
+            return [str(i) for i in range(a, b + step, step)]
+        if rt == "I-XII":
+            return list(self._ROMAN)
+        if rt == "Mo-Su":
+            return list(self._WEEKDAY_2)
+        if rt == "Mon-Sun":
+            return list(self._WEEKDAY_3)
+        if rt == "Jan-Dec":
+            return list(self._MONTHS)
+        return [str(i) for i in range(1, 13)]
+
+    def _hidden_positions(self) -> set[int]:
+        """解析 Hide text（逗號分隔的 1-based 序位字串）；格式錯誤的片段直接略過。"""
+        result: set[int] = set()
+        for part in self._hide_text.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                result.add(int(part))
+            except ValueError:
+                pass
+        return result
+
+    def _squarify_radius(self, angle_deg: float) -> float:
+        """依超橢圓（Lamé curve）公式將圓形半徑往方形擠壓；Squarify=1 為圓形下限（n=2）。"""
+        t = (self._squarify - 1.0) / 99.0
+        n = 2.0 + 10.0 * (t ** 2)
+        rad = math.radians(angle_deg)
+        c, s = abs(math.cos(rad)), abs(math.sin(rad))
+        denom = (c ** n + s ** n) ** (1.0 / n)
+        return self._radius / denom if denom > 1e-9 else self._radius
+
+    def _item_rotation(self, angle_deg: float) -> float:
+        style = self._text_rotation
+        if style == "Rotate":
+            return angle_deg
+        if style == "Rotate Inverse":
+            return angle_deg + 180.0
+        if style == "Rotate Upright":
+            a = angle_deg % 360.0
+            return angle_deg if (a <= 90.0 or a >= 270.0) else angle_deg + 180.0
+        return 0.0  # "Upright"
+
+    def _rebuild_layout(self) -> None:
+        """依 Ring type/Custom start-end/Show every/Hide text/Angle start-end/Squarify/
+        Text rotation 重新計算每個可見標籤的位置、旋轉與繪製用 local rect
+        （每個標籤永遠置中於其環上位置），並算出精確 boundingRect
+        （原點＝圓心，未套用 Rotation/Skew/Anim scale）。
+        """
+        fm = QFontMetricsF(self._font)
+        labels = self._generate_labels()
+        total = len(labels)
+        hidden = self._hidden_positions()
+        span = self._angle_end - self._angle_start
+        step = (span / total) if total else 0.0
+        fx, fy = -0.5, -0.5  # 每個標籤置中於其環上位置
+        ascent, descent = fm.ascent(), fm.descent()
+        h = ascent + descent
+
+        items: list[tuple[str, float, float, float, QRectF]] = []
+        bounds = QRectF()
+        for idx, text in enumerate(labels):
+            pos = idx + 1
+            if pos % self._show_every != 0 or pos in hidden:
+                continue
+
+            angle = self._angle_start + idx * step
+            r = self._squarify_radius(angle)
+            rad = math.radians(angle)
+            cx = r * math.sin(rad)
+            cy = -r * math.cos(rad)
+            rot_deg = self._item_rotation(angle)
+
+            w = fm.horizontalAdvance(text)
+            local_rect = QRectF(fx * w, fy * h, w, h)
+            items.append((text, cx, cy, rot_deg, local_rect))
+
+            t = QTransform()
+            t.translate(cx, cy)
+            t.rotate(rot_deg)
+            bounds = bounds.united(t.mapRect(local_rect))
+
+        self._items = items
+        self._bounding_rect = bounds
+
+    def _apply_transform(self) -> None:
+        """縮放/旋轉/傾斜一律以圓心（局部原點）為軸，最後平移至 (X,Y)。
+        與 CurvedTextLayer._apply_transform 邏輯一致。
+        """
+        sx = self._anim_scale_x / 100.0
+        sy = self._anim_scale_y / 100.0
+        sh_x = math.tan(math.radians(self._skew_x))
+        sh_y = math.tan(math.radians(self._skew_y))
+
+        t = QTransform()
+        t.translate(self._x, self._y)
+        t.rotate(self._rotation)
+        t.scale(sx, sy)
+        t.shear(sh_x, sh_y)
+        self.setTransform(t)
+
+    # ── QGraphicsItem 必要覆寫 ────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        return self._bounding_rect
+
+    def paint(self, painter, option, widget=None) -> None:
+        if not self._items:
+            return
+        painter.setFont(self._font)
+        painter.setPen(QPen(self._brush_color))
+        for text, cx, cy, rot_deg, local_rect in self._items:
+            painter.save()
+            painter.translate(cx, cy)
+            painter.rotate(rot_deg)
+            painter.drawText(local_rect, Qt.AlignmentFlag.AlignCenter, text)
+            painter.restore()
+
+    # ── LayerMixin 覆寫 ────────────────────────────────────────────────────────
+
+    def apply_attr(self, field: str, value) -> None:
+        if field == "X":
+            self._x = to_float(value)
+            self._apply_transform()
+        elif field == "Y":
+            self._y = to_float(value)
+            self._apply_transform()
+        elif field == "Radius":
+            self.prepareGeometryChange()
+            self._radius = max(1.0, to_float(value, self._radius))
+            self._rebuild_layout()
+        elif field in self._LAYOUT_FIELDS:
+            self.prepareGeometryChange()
+            if field == "Ring type":
+                self._ring_type = str(value)
+            elif field == "Custom start":
+                self._custom_start = int(round(to_float(value, self._custom_start)))
+            elif field == "Custom end":
+                self._custom_end = int(round(to_float(value, self._custom_end)))
+            elif field == "Show every":
+                self._show_every = max(1, int(round(to_float(value, self._show_every))))
+            elif field == "Hide text":
+                self._hide_text = str(value or "")
+            elif field == "Angle start":
+                self._angle_start = to_float(value, self._angle_start)
+            elif field == "Angle end":
+                self._angle_end = to_float(value, self._angle_end)
+            elif field == "Squarify":
+                self._squarify = max(1.0, min(100.0, to_float(value, self._squarify)))
+            elif field == "Text rotation":
+                self._text_rotation = str(value)
+            self._rebuild_layout()
+        elif field == "Font":
+            self._font_name = str(value)
+            self._apply_font()
+            self.prepareGeometryChange()
+            self._rebuild_layout()
+        elif field == "Text size":
+            self._font_size = int(to_float(value, self._font_size))
+            self._apply_font()
+            self.prepareGeometryChange()
+            self._rebuild_layout()
+        elif field == "Color":
+            self._color_day = value
+            self._refresh_color()
+        elif field == "Color dim":
+            self._color_dim = value
+            self._refresh_color()
+        elif field == "Rotation":
+            self._rotation = to_float(value)
+            self._apply_transform()
+        elif field == "Skew X":
+            self._skew_x = to_float(value)
+            self._apply_transform()
+        elif field == "Skew Y":
+            self._skew_y = to_float(value)
+            self._apply_transform()
+        elif field == "Anim scale X":
+            self._anim_scale_x = to_float(value, self._anim_scale_x)
+            self._apply_transform()
+        elif field == "Anim scale Y":
+            self._anim_scale_y = to_float(value, self._anim_scale_y)
+            self._apply_transform()
+        elif field == "Opacity":
+            self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
+        elif field == "Layer":
+            self.set_layer_value(int(to_float(value)))
+
+    def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
+                           base_vals: dict) -> dict:
+        new_anim_sx = float(base_vals.get("Anim scale X", self._anim_scale_x)) * sx
+        new_anim_sy = float(base_vals.get("Anim scale Y", self._anim_scale_y)) * sy
+        new_x = pivot_x + (float(base_vals.get("X", self._x)) - pivot_x) * sx
+        new_y = pivot_y + (float(base_vals.get("Y", self._y)) - pivot_y) * sy
+        result = {
+            "Anim scale X": int(round(max(-2048.0, min(2048.0, new_anim_sx)))),
+            "Anim scale Y": int(round(max(-2048.0, min(2048.0, new_anim_sy)))),
+            "X": int(round(max(-1280.0, min(1280.0, new_x)))),
+            "Y": int(round(max(-1280.0, min(1280.0, new_y)))),
+        }
+        for field, val in result.items():
+            self.apply_attr(field, val)
+        return result
+
+    # ── 單選拖曳縮放 hook（Anim scale 百分比語意）───────────────────────────────
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return self._anim_scale_x, self._anim_scale_y
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = max(-2048.0, min(2048.0, sx_pct))
+        csy = max(-2048.0, min(2048.0, sy_pct))
+        if csx == 0:
+            csx = 1.0 if sx_pct >= 0 else -1.0
+        if csy == 0:
+            csy = 1.0 if sy_pct >= 0 else -1.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_sx = int(round(max(-2048.0, min(2048.0, new_sx_pct))))
+        new_sy = int(round(max(-2048.0, min(2048.0, new_sy_pct))))
+        if new_sx == 0:
+            new_sx = 1 if new_sx_pct >= 0 else -1
+        if new_sy == 0:
+            new_sy = 1 if new_sy_pct >= 0 else -1
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Anim scale X", new_sx)
+        self.apply_attr("Anim scale Y", new_sy)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Anim scale X": new_sx, "Anim scale Y": new_sy, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Anim scale X": self._anim_scale_x, "Anim scale Y": self._anim_scale_y,
+        }
+
+
+# ── ImageLayer ────────────────────────────────────────────────────────────────
+
+class ImageLayer(QGraphicsItem, LayerMixin):
+    """
+    繼承 LayerMixin 的圖片 item。
+    X/Y 為錨點座標；錨點位置由 Alignment 欄位決定（與 TextLayer 共用同一套 _ANCHOR）。
+    Width/Height 直接是顯示尺寸（無獨立縮放百分比概念）。
+    """
+
+    _ANCHOR = TextLayer._ANCHOR
+
+    def __init__(self, values: dict, parent=None):
+        super().__init__(parent)
+        self.__init_layer__()
+        self.can_scale = True
+
+        self._x         = to_float(values.get("X", 0))
+        self._y         = to_float(values.get("Y", 0))
+        self._width     = max(1.0, to_float(values.get("Width", 100), 100.0))
+        self._height    = max(1.0, to_float(values.get("Height", 100), 100.0))
+        self._alignment = str(values.get("Alignment", "Center"))
+        self._rotation  = to_float(values.get("Rotation", 0))
+        self._skew_x    = to_float(values.get("Skew X", 0))
+        self._skew_y    = to_float(values.get("Skew Y", 0))
+        self._tint      = values.get("Tint", "")
+        self._image_path = str(values.get("Custom image", "") or "")
+        self._display   = str(values.get("Display", "Always"))
+
+        self._src_pixmap: QPixmap = QPixmap()
+        self._render_pixmap: QPixmap = QPixmap()
+        self._load_pixmap()
+        self._rebuild_pixmap()
+
+        self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
+        self._layer_value = int(to_float(values.get("Layer", 0)))
+        self._apply_transform()
+        self._refresh_display()
+
+    # ── 內部工具 ──────────────────────────────────────────────────────────────
+
+    def _load_pixmap(self) -> None:
+        pm = QPixmap()
+        if self._image_path and pm.load(self._image_path):
+            self._src_pixmap = pm
+        else:
+            self._src_pixmap = QPixmap()
+
+    def _rebuild_pixmap(self) -> None:
+        """依目前 Width/Height/Tint 重新產生繪製用快取 pixmap；無來源圖片時保持空白（完全不畫）。"""
+        w = max(1, int(round(self._width)))
+        h = max(1, int(round(self._height)))
+        self._render_pixmap = _scale_and_tint(self._src_pixmap, w, h, self._tint)
+
+    def _apply_transform(self) -> None:
+        """變換矩陣順序：傾斜(繞中心) → 對齊(錨點移至原點) → 旋轉 → 平移(X,Y)。
+        與 TextLayer._apply_transform 邏輯一致，但無獨立縮放步驟（Width/Height 已是實際尺寸）。
+        """
+        w, h = self._width, self._height
+        fx, fy = self._ANCHOR.get(self._alignment, (-0.5, -0.5))
+        ax, ay = fx * w, fy * h
+
+        sh_x = math.tan(math.radians(self._skew_x))
+        sh_y = math.tan(math.radians(self._skew_y))
+
+        t = QTransform()
+        t.translate(self._x, self._y)
+        t.rotate(self._rotation)
+        t.translate(ax + w / 2, ay + h / 2)
+        t.shear(sh_x, sh_y)
+        t.translate(-w / 2, -h / 2)
+        self.setTransform(t)
+
+    # ── QGraphicsItem 必要覆寫 ────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._width, self._height)
+
+    def paint(self, painter, option, widget=None) -> None:
+        if self._render_pixmap.isNull():
+            return
+        painter.drawPixmap(QRectF(0, 0, self._width, self._height), self._render_pixmap,
+                           QRectF(self._render_pixmap.rect()))
+
+    # ── LayerMixin 覆寫 ────────────────────────────────────────────────────────
+
+    def apply_attr(self, field: str, value) -> None:
+        if field == "X":
+            self._x = to_float(value)
+            self._apply_transform()
+        elif field == "Y":
+            self._y = to_float(value)
+            self._apply_transform()
+        elif field == "Width":
+            self.prepareGeometryChange()
+            self._width = max(1.0, to_float(value, self._width))
+            self._rebuild_pixmap()
+            self._apply_transform()
+        elif field == "Height":
+            self.prepareGeometryChange()
+            self._height = max(1.0, to_float(value, self._height))
+            self._rebuild_pixmap()
+            self._apply_transform()
+        elif field == "Alignment":
+            self._alignment = str(value)
+            self._apply_transform()
+        elif field == "Rotation":
+            self._rotation = to_float(value)
+            self._apply_transform()
+        elif field == "Skew X":
+            self._skew_x = to_float(value)
+            self._apply_transform()
+        elif field == "Skew Y":
+            self._skew_y = to_float(value)
+            self._apply_transform()
+        elif field == "Opacity":
+            self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Tint":
+            self._tint = value
+            self._rebuild_pixmap()
+            self.update()
+        elif field == "Custom image":
+            self._image_path = str(value or "")
+            self._load_pixmap()
+            self._rebuild_pixmap()
+            self.update()
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
+        elif field == "Layer":
+            self.set_layer_value(int(to_float(value)))
+
+    def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
+                           base_vals: dict) -> dict:
+        new_w = float(base_vals.get("Width", self._width)) * sx
+        new_h = float(base_vals.get("Height", self._height)) * sy
+        new_x = pivot_x + (float(base_vals.get("X", self._x)) - pivot_x) * sx
+        new_y = pivot_y + (float(base_vals.get("Y", self._y)) - pivot_y) * sy
+        result = {
+            "Width":  int(round(max(1.0, min(2048.0, new_w)))),
+            "Height": int(round(max(1.0, min(2048.0, new_h)))),
+            "X": int(round(max(-1280.0, min(1280.0, new_x)))),
+            "Y": int(round(max(-1280.0, min(1280.0, new_y)))),
+        }
+        for field, val in result.items():
+            self.apply_attr(field, val)
+        return result
+
+    # ── 單選拖曳縮放 hook（Width/Height 像素語意）──────────────────────────────
+
+    def scale_geom(self) -> tuple[float, float]:
+        return self._width, self._height
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return 100.0, 100.0
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = sx_pct
+        csy = sy_pct
+        if geom_w > 0.5:
+            csx = max(1.0, min(2048.0, geom_w * sx_pct / 100.0)) / geom_w * 100.0
+        if geom_h > 0.5:
+            csy = max(1.0, min(2048.0, geom_h * sy_pct / 100.0)) / geom_h * 100.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_w = int(round(max(1.0, min(2048.0, geom_w * new_sx_pct / 100.0))))
+        new_h = int(round(max(1.0, min(2048.0, geom_h * new_sy_pct / 100.0))))
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Width", new_w)
+        self.apply_attr("Height", new_h)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Width": new_w, "Height": new_h, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Width": self._width, "Height": self._height,
+        }
+
+
+# ── SlideshowLayer（幻燈片）─────────────────────────────────────────────────────
+
+class SlideshowLayer(QGraphicsItem, LayerMixin):
+    """
+    繼承 LayerMixin 的幻燈片 item。
+    幾何模型與 ImageLayer 相同（X/Y 為錨點座標，Alignment 決定錨點位置，
+    Width/Height 為實際顯示尺寸）；差異在於 Photo 為逗號分隔的多張圖片路徑清單，
+    每隔 Photo duration 秒（由 PanelWidgetManager 每秒呼叫一次 tick() 累計）自動切換至下一張，
+    循環至清單開頭。無法載入的路徑直接略過；清單為空或全部載入失敗時不繪製任何內容。
+    """
+
+    _ANCHOR = TextLayer._ANCHOR
+
+    def __init__(self, values: dict, parent=None):
+        super().__init__(parent)
+        self.__init_layer__()
+        self.can_scale = True
+
+        self._x         = to_float(values.get("X", 0))
+        self._y         = to_float(values.get("Y", 0))
+        self._width     = max(1.0, to_float(values.get("Width", 100), 100.0))
+        self._height    = max(1.0, to_float(values.get("Height", 100), 100.0))
+        self._alignment = str(values.get("Alignment", "Center"))
+        self._rotation  = to_float(values.get("Rotation", 0))
+        self._skew_x    = to_float(values.get("Skew X", 0))
+        self._skew_y    = to_float(values.get("Skew Y", 0))
+        self._tint      = values.get("Tint", "")
+        self._photo_str      = str(values.get("Photo", "") or "")
+        self._photo_duration = max(1.0, to_float(values.get("Photo duration", 5), 5.0))
+        self._photo_clip     = str(values.get("Photo clip", "None") or "None")
+        self._display   = str(values.get("Display", "Always"))
+
+        self._src_pixmaps: list[QPixmap] = []
+        self._current_index = 0
+        self._elapsed_secs = 0.0
+        self._render_pixmap: QPixmap = QPixmap()
+        self._load_pixmaps()
+        self._rebuild_pixmap()
+
+        self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
+        self._layer_value = int(to_float(values.get("Layer", 0)))
+        self._apply_transform()
+        self._refresh_display()
+
+    # ── 內部工具 ──────────────────────────────────────────────────────────────
+
+    def _load_pixmaps(self) -> None:
+        """依 Photo（逗號分隔路徑清單）載入所有可成功讀取的圖片；重設目前索引與計時。"""
+        pixmaps: list[QPixmap] = []
+        for path in self._photo_str.split(","):
+            path = path.strip()
+            if not path:
+                continue
+            pm = QPixmap()
+            if pm.load(path):
+                pixmaps.append(pm)
+        self._src_pixmaps = pixmaps
+        self._current_index = 0
+        self._elapsed_secs = 0.0
+
+    def _current_pixmap(self) -> QPixmap:
+        if not self._src_pixmaps:
+            return QPixmap()
+        return self._src_pixmaps[self._current_index % len(self._src_pixmaps)]
+
+    def _rebuild_pixmap(self) -> None:
+        """依目前 Width/Height/Tint/Photo clip/目前索引重新產生繪製用快取 pixmap；無圖片時保持空白。
+        先以裁切式縮放（KeepAspectRatioByExpanding + 置中裁切）避免內容變形，再套用 Tint，
+        最後依 Photo clip 裁切為 None/Circle/Corner 1/Corner 2 形狀。
+        """
+        w = max(1, int(round(self._width)))
+        h = max(1, int(round(self._height)))
+        cropped = _scale_crop_fill(self._current_pixmap(), w, h)
+        tinted = _scale_and_tint(cropped, w, h, self._tint)
+        self._render_pixmap = _clip_pixmap(tinted, w, h, self._photo_clip)
+
+    def _apply_transform(self) -> None:
+        """變換矩陣順序：傾斜(繞中心) → 對齊(錨點移至原點) → 旋轉 → 平移(X,Y)。
+        與 ImageLayer._apply_transform 邏輯一致。
+        """
+        w, h = self._width, self._height
+        fx, fy = self._ANCHOR.get(self._alignment, (-0.5, -0.5))
+        ax, ay = fx * w, fy * h
+
+        sh_x = math.tan(math.radians(self._skew_x))
+        sh_y = math.tan(math.radians(self._skew_y))
+
+        t = QTransform()
+        t.translate(self._x, self._y)
+        t.rotate(self._rotation)
+        t.translate(ax + w / 2, ay + h / 2)
+        t.shear(sh_x, sh_y)
+        t.translate(-w / 2, -h / 2)
+        self.setTransform(t)
+
+    # ── QGraphicsItem 必要覆寫 ────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._width, self._height)
+
+    def paint(self, painter, option, widget=None) -> None:
+        if self._render_pixmap.isNull():
+            return
+        painter.drawPixmap(QRectF(0, 0, self._width, self._height), self._render_pixmap,
+                           QRectF(self._render_pixmap.rect()))
+
+    # ── LayerMixin 覆寫 ────────────────────────────────────────────────────────
+
+    def tick(self) -> None:
+        """每秒累計一次；達到 Photo duration 秒數即切換至下一張圖片（循環）。"""
+        if len(self._src_pixmaps) <= 1:
+            return
+        self._elapsed_secs += 1.0
+        if self._elapsed_secs >= self._photo_duration:
+            self._elapsed_secs = 0.0
+            self._current_index = (self._current_index + 1) % len(self._src_pixmaps)
+            self._rebuild_pixmap()
+            self.update()
+
+    def apply_attr(self, field: str, value) -> None:
+        if field == "X":
+            self._x = to_float(value)
+            self._apply_transform()
+        elif field == "Y":
+            self._y = to_float(value)
+            self._apply_transform()
+        elif field == "Width":
+            self.prepareGeometryChange()
+            self._width = max(1.0, to_float(value, self._width))
+            self._rebuild_pixmap()
+            self._apply_transform()
+        elif field == "Height":
+            self.prepareGeometryChange()
+            self._height = max(1.0, to_float(value, self._height))
+            self._rebuild_pixmap()
+            self._apply_transform()
+        elif field == "Alignment":
+            self._alignment = str(value)
+            self._apply_transform()
+        elif field == "Rotation":
+            self._rotation = to_float(value)
+            self._apply_transform()
+        elif field == "Skew X":
+            self._skew_x = to_float(value)
+            self._apply_transform()
+        elif field == "Skew Y":
+            self._skew_y = to_float(value)
+            self._apply_transform()
+        elif field == "Opacity":
+            self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Tint":
+            self._tint = value
+            self._rebuild_pixmap()
+            self.update()
+        elif field == "Photo":
+            new_str = str(value or "")
+            if new_str == self._photo_str:
+                return
+            self._photo_str = new_str
+            self._load_pixmaps()
+            self._rebuild_pixmap()
+            self.update()
+        elif field == "Photo duration":
+            self._photo_duration = max(1.0, to_float(value, self._photo_duration))
+        elif field == "Photo clip":
+            self._photo_clip = str(value or "None")
+            self._rebuild_pixmap()
+            self.update()
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
+        elif field == "Layer":
+            self.set_layer_value(int(to_float(value)))
+
+    def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
+                           base_vals: dict) -> dict:
+        new_w = float(base_vals.get("Width", self._width)) * sx
+        new_h = float(base_vals.get("Height", self._height)) * sy
+        new_x = pivot_x + (float(base_vals.get("X", self._x)) - pivot_x) * sx
+        new_y = pivot_y + (float(base_vals.get("Y", self._y)) - pivot_y) * sy
+        result = {
+            "Width":  int(round(max(1.0, min(2048.0, new_w)))),
+            "Height": int(round(max(1.0, min(2048.0, new_h)))),
+            "X": int(round(max(-1280.0, min(1280.0, new_x)))),
+            "Y": int(round(max(-1280.0, min(1280.0, new_y)))),
+        }
+        for field, val in result.items():
+            self.apply_attr(field, val)
+        return result
+
+    # ── 單選拖曳縮放 hook（Width/Height 像素語意）──────────────────────────────
+
+    def scale_geom(self) -> tuple[float, float]:
+        return self._width, self._height
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return 100.0, 100.0
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = sx_pct
+        csy = sy_pct
+        if geom_w > 0.5:
+            csx = max(1.0, min(2048.0, geom_w * sx_pct / 100.0)) / geom_w * 100.0
+        if geom_h > 0.5:
+            csy = max(1.0, min(2048.0, geom_h * sy_pct / 100.0)) / geom_h * 100.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_w = int(round(max(1.0, min(2048.0, geom_w * new_sx_pct / 100.0))))
+        new_h = int(round(max(1.0, min(2048.0, geom_h * new_sy_pct / 100.0))))
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Width", new_w)
+        self.apply_attr("Height", new_h)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Width": new_w, "Height": new_h, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Width": self._width, "Height": self._height,
+        }
+
+
+# ── ImageCondLayer（Sprite／條件圖片，如 Battery、Weather、Moon phase）───────────
+
+class ImageCondLayer(QGraphicsItem, LayerMixin):
+    """
+    繼承 LayerMixin 的條件圖片（sprite）item。
+    Custom image 為一張依 Image grid（如 "3x3"，cols x rows）切分的雪碧圖，
+    Image selection 為 Lua 表達式，求值後取整數作為 1-based 格號
+    （左上為 1，由左至右、由上至下遞增），裁出對應格再依 Width/Height 縮放顯示。
+    其餘欄位語意與 ImageLayer 相同。
+    """
+
+    _ANCHOR = TextLayer._ANCHOR
+
+    def __init__(self, values: dict, parent=None):
+        super().__init__(parent)
+        self.__init_layer__()
+        self.can_scale = True
+
+        self._x         = to_float(values.get("X", 0))
+        self._y         = to_float(values.get("Y", 0))
+        self._width     = max(1.0, to_float(values.get("Width", 100), 100.0))
+        self._height    = max(1.0, to_float(values.get("Height", 100), 100.0))
+        self._alignment = str(values.get("Alignment", "Center"))
+        self._rotation  = to_float(values.get("Rotation", 0))
+        self._skew_x    = to_float(values.get("Skew X", 0))
+        self._skew_y    = to_float(values.get("Skew Y", 0))
+        self._tint      = values.get("Tint", "")
+        self._image_path = str(values.get("Custom image", "") or "")
+        self._image_grid = str(values.get("Image grid", "3x3") or "3x3")
+        self._selection  = self._eval_selection(values.get("Image selection", 1))
+        self._display   = str(values.get("Display", "Always"))
+
+        self._src_pixmap: QPixmap = QPixmap()
+        self._cell_pixmap: QPixmap = QPixmap()
+        self._render_pixmap: QPixmap = QPixmap()
+        self._load_pixmap()
+        self._rebuild_cell()
+        self._rebuild_pixmap()
+
+        self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
+        self._layer_value = int(to_float(values.get("Layer", 0)))
+        self._apply_transform()
+        self._refresh_display()
+
+    # ── 內部工具 ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _eval_selection(value) -> int:
+        return int(round(to_float(value, 1.0)))
+
+    @staticmethod
+    def _parse_grid(grid: str) -> tuple[int, int]:
+        """解析 "WxH" 字串為 (cols, rows)；格式錯誤時回退 (3, 3)。"""
+        try:
+            cols_s, rows_s = str(grid).lower().split("x")
+            cols, rows = int(cols_s), int(rows_s)
+            if cols > 0 and rows > 0:
+                return cols, rows
+        except (ValueError, TypeError):
+            pass
+        return 3, 3
+
+    def _load_pixmap(self) -> None:
+        pm = QPixmap()
+        if self._image_path and pm.load(self._image_path):
+            self._src_pixmap = pm
+        else:
+            self._src_pixmap = QPixmap()
+
+    def _rebuild_cell(self) -> None:
+        """依 Image grid 與 Image selection 從來源雪碧圖裁出目前格。"""
+        if self._src_pixmap.isNull():
+            self._cell_pixmap = QPixmap()
+            return
+        cols, rows = self._parse_grid(self._image_grid)
+        total = cols * rows
+        idx = max(1, min(total, self._selection)) - 1
+        row, col = divmod(idx, cols)
+        sw, sh = self._src_pixmap.width(), self._src_pixmap.height()
+        x0 = round(col * sw / cols)
+        x1 = round((col + 1) * sw / cols)
+        y0 = round(row * sh / rows)
+        y1 = round((row + 1) * sh / rows)
+        self._cell_pixmap = self._src_pixmap.copy(x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+
+    def _rebuild_pixmap(self) -> None:
+        """依目前 Width/Height/Tint 重新產生繪製用快取 pixmap；無來源圖片時保持空白（完全不畫）。"""
+        w = max(1, int(round(self._width)))
+        h = max(1, int(round(self._height)))
+        self._render_pixmap = _scale_and_tint(self._cell_pixmap, w, h, self._tint)
+
+    def _apply_transform(self) -> None:
+        """變換矩陣順序：傾斜(繞中心) → 對齊(錨點移至原點) → 旋轉 → 平移(X,Y)。
+        與 ImageLayer._apply_transform 邏輯一致。
+        """
+        w, h = self._width, self._height
+        fx, fy = self._ANCHOR.get(self._alignment, (-0.5, -0.5))
+        ax, ay = fx * w, fy * h
+
+        sh_x = math.tan(math.radians(self._skew_x))
+        sh_y = math.tan(math.radians(self._skew_y))
+
+        t = QTransform()
+        t.translate(self._x, self._y)
+        t.rotate(self._rotation)
+        t.translate(ax + w / 2, ay + h / 2)
+        t.shear(sh_x, sh_y)
+        t.translate(-w / 2, -h / 2)
+        self.setTransform(t)
+
+    # ── QGraphicsItem 必要覆寫 ────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._width, self._height)
+
+    def paint(self, painter, option, widget=None) -> None:
+        if self._render_pixmap.isNull():
+            return
+        painter.drawPixmap(QRectF(0, 0, self._width, self._height), self._render_pixmap,
+                           QRectF(self._render_pixmap.rect()))
+
+    # ── LayerMixin 覆寫 ────────────────────────────────────────────────────────
+
+    def apply_attr(self, field: str, value) -> None:
+        if field == "X":
+            self._x = to_float(value)
+            self._apply_transform()
+        elif field == "Y":
+            self._y = to_float(value)
+            self._apply_transform()
+        elif field == "Width":
+            self.prepareGeometryChange()
+            self._width = max(1.0, to_float(value, self._width))
+            self._rebuild_pixmap()
+            self._apply_transform()
+        elif field == "Height":
+            self.prepareGeometryChange()
+            self._height = max(1.0, to_float(value, self._height))
+            self._rebuild_pixmap()
+            self._apply_transform()
+        elif field == "Alignment":
+            self._alignment = str(value)
+            self._apply_transform()
+        elif field == "Rotation":
+            self._rotation = to_float(value)
+            self._apply_transform()
+        elif field == "Skew X":
+            self._skew_x = to_float(value)
+            self._apply_transform()
+        elif field == "Skew Y":
+            self._skew_y = to_float(value)
+            self._apply_transform()
+        elif field == "Opacity":
+            self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Tint":
+            self._tint = value
+            self._rebuild_pixmap()
+            self.update()
+        elif field == "Custom image":
+            self._image_path = str(value or "")
+            self._load_pixmap()
+            self._rebuild_cell()
+            self._rebuild_pixmap()
+            self.update()
+        elif field == "Image grid":
+            self._image_grid = str(value or "3x3")
+            self._rebuild_cell()
+            self._rebuild_pixmap()
+            self.update()
+        elif field == "Image selection":
+            self._selection = self._eval_selection(value)
+            self._rebuild_cell()
+            self._rebuild_pixmap()
+            self.update()
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
+        elif field == "Layer":
+            self.set_layer_value(int(to_float(value)))
+
+    def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
+                           base_vals: dict) -> dict:
+        new_w = float(base_vals.get("Width", self._width)) * sx
+        new_h = float(base_vals.get("Height", self._height)) * sy
+        new_x = pivot_x + (float(base_vals.get("X", self._x)) - pivot_x) * sx
+        new_y = pivot_y + (float(base_vals.get("Y", self._y)) - pivot_y) * sy
+        result = {
+            "Width":  int(round(max(1.0, min(2048.0, new_w)))),
+            "Height": int(round(max(1.0, min(2048.0, new_h)))),
+            "X": int(round(max(-1280.0, min(1280.0, new_x)))),
+            "Y": int(round(max(-1280.0, min(1280.0, new_y)))),
+        }
+        for field, val in result.items():
+            self.apply_attr(field, val)
+        return result
+
+    # ── 單選拖曳縮放 hook（Width/Height 像素語意）──────────────────────────────
+
+    def scale_geom(self) -> tuple[float, float]:
+        return self._width, self._height
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return 100.0, 100.0
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = sx_pct
+        csy = sy_pct
+        if geom_w > 0.5:
+            csx = max(1.0, min(2048.0, geom_w * sx_pct / 100.0)) / geom_w * 100.0
+        if geom_h > 0.5:
+            csy = max(1.0, min(2048.0, geom_h * sy_pct / 100.0)) / geom_h * 100.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_w = int(round(max(1.0, min(2048.0, geom_w * new_sx_pct / 100.0))))
+        new_h = int(round(max(1.0, min(2048.0, geom_h * new_sy_pct / 100.0))))
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Width", new_w)
+        self.apply_attr("Height", new_h)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Width": new_w, "Height": new_h, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Width": self._width, "Height": self._height,
+        }
+
+
+class ShapeLayer(QGraphicsItem, LayerMixin):
+    """
+    繼承 LayerMixin 的形狀 item。
+    X/Y 為錨點座標；錨點位置由 Alignment 欄位決定（與 TextLayer/ImageLayer 共用同一套 _ANCHOR）。
+    Width/Height 直接是顯示尺寸；依 Shape 欄位以 QPainterPath 繪出對應幾何形狀並填滿 Color。
+    """
+
+    _ANCHOR = TextLayer._ANCHOR
+
+    def __init__(self, values: dict, parent=None):
+        super().__init__(parent)
+        self.__init_layer__()
+        self.can_scale = True
+
+        self._x         = to_float(values.get("X", 0))
+        self._y         = to_float(values.get("Y", 0))
+        self._width     = max(1.0, to_float(values.get("Width", 100), 100.0))
+        self._height    = max(1.0, to_float(values.get("Height", 100), 100.0))
+        self._alignment = str(values.get("Alignment", "Center"))
+        self._rotation  = to_float(values.get("Rotation", 0))
+        self._skew_x    = to_float(values.get("Skew X", 0))
+        self._skew_y    = to_float(values.get("Skew Y", 0))
+        self._shape     = str(values.get("Shape", "Square"))
+        self._color     = values.get("Color", "ffffff")
+        self._display   = str(values.get("Display", "Always"))
+
+        self._path = QPainterPath()
+        self._brush_color = QColor(Qt.GlobalColor.white)
+        self._rebuild_path()
+        self._refresh_brush_color()
+
+        self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
+        self._layer_value = int(to_float(values.get("Layer", 0)))
+        self._apply_transform()
+        self._refresh_display()
+
+    # ── 內部工具 ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _regular_polygon_path(w: float, h: float, sides: int) -> QPainterPath:
+        """繪出內接於 (0,0,w,h) bounding box 的正多邊形，頂點朝上。"""
+        cx, cy = w / 2.0, h / 2.0
+        rx, ry = w / 2.0, h / 2.0
+        path = QPainterPath()
+        for i in range(sides):
+            angle = math.radians(-90.0 + i * 360.0 / sides)
+            x, y = cx + rx * math.cos(angle), cy + ry * math.sin(angle)
+            path.moveTo(x, y) if i == 0 else path.lineTo(x, y)
+        path.closeSubpath()
+        return path
+
+    @staticmethod
+    def _star_path(w: float, h: float, points: int = 5, inner_ratio: float = 0.5) -> QPainterPath:
+        """繪出內接於 (0,0,w,h) bounding box 的正星形，頂點朝上。"""
+        cx, cy = w / 2.0, h / 2.0
+        outer_rx, outer_ry = w / 2.0, h / 2.0
+        inner_rx, inner_ry = outer_rx * inner_ratio, outer_ry * inner_ratio
+        step = 360.0 / (points * 2)
+        path = QPainterPath()
+        for i in range(points * 2):
+            angle = math.radians(-90.0 + i * step)
+            rx, ry = (outer_rx, outer_ry) if i % 2 == 0 else (inner_rx, inner_ry)
+            x, y = cx + rx * math.cos(angle), cy + ry * math.sin(angle)
+            path.moveTo(x, y) if i == 0 else path.lineTo(x, y)
+        path.closeSubpath()
+        return path
+
+    @staticmethod
+    def _heart_path(w: float, h: float) -> QPainterPath:
+        """雙圓弧上半（左右葉）＋二次貝茲曲線收尾至下方尖點，繪出完全內接於 (0,0,w,h) 的平滑心形。"""
+        rx, ry = w / 4.0, h / 4.0
+        cy = ry
+        mid_y = (cy + h) / 2.0
+        path = QPainterPath()
+        path.moveTo(0.0, cy)
+        path.arcTo(QRectF(0.0, 0.0, 2 * rx, 2 * ry), 180.0, -180.0)
+        path.arcTo(QRectF(2 * rx, 0.0, 2 * rx, 2 * ry), 180.0, -180.0)
+        path.quadTo(w, mid_y, w / 2.0, h)
+        path.quadTo(0.0, mid_y, 0.0, cy)
+        path.closeSubpath()
+        return path
+
+    def _rebuild_path(self) -> None:
+        w, h = self._width, self._height
+        shape = self._shape
+        if shape == "Circle":
+            path = QPainterPath()
+            path.addEllipse(0, 0, w, h)
+        elif shape == "Triangle":
+            path = self._regular_polygon_path(w, h, 3)
+        elif shape == "Pentagon":
+            path = self._regular_polygon_path(w, h, 5)
+        elif shape == "Hexagon":
+            path = self._regular_polygon_path(w, h, 6)
+        elif shape == "Star":
+            path = self._star_path(w, h)
+        elif shape == "Heart":
+            path = self._heart_path(w, h)
+        else:  # "Square" 及未知形狀 fallback
+            path = QPainterPath()
+            path.addRect(0, 0, w, h)
+        self._path = path
+
+    def _refresh_brush_color(self) -> None:
+        self._brush_color = _parse_hex_color(self._color)
+
+    def _apply_transform(self) -> None:
+        """變換矩陣順序：傾斜(繞中心) → 對齊(錨點移至原點) → 旋轉 → 平移(X,Y)。
+        與 ImageLayer._apply_transform 邏輯一致。
+        """
+        w, h = self._width, self._height
+        fx, fy = self._ANCHOR.get(self._alignment, (-0.5, -0.5))
+        ax, ay = fx * w, fy * h
+
+        sh_x = math.tan(math.radians(self._skew_x))
+        sh_y = math.tan(math.radians(self._skew_y))
+
+        t = QTransform()
+        t.translate(self._x, self._y)
+        t.rotate(self._rotation)
+        t.translate(ax + w / 2, ay + h / 2)
+        t.shear(sh_x, sh_y)
+        t.translate(-w / 2, -h / 2)
+        self.setTransform(t)
+
+    # ── QGraphicsItem 必要覆寫 ────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._width, self._height)
+
+    def paint(self, painter, option, widget=None) -> None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(self._brush_color))
+        painter.drawPath(self._path)
+
+    # ── LayerMixin 覆寫 ────────────────────────────────────────────────────────
+
+    def apply_attr(self, field: str, value) -> None:
+        if field == "X":
+            self._x = to_float(value)
+            self._apply_transform()
+        elif field == "Y":
+            self._y = to_float(value)
+            self._apply_transform()
+        elif field == "Width":
+            self.prepareGeometryChange()
+            self._width = max(1.0, to_float(value, self._width))
+            self._rebuild_path()
+            self._apply_transform()
+        elif field == "Height":
+            self.prepareGeometryChange()
+            self._height = max(1.0, to_float(value, self._height))
+            self._rebuild_path()
+            self._apply_transform()
+        elif field == "Alignment":
+            self._alignment = str(value)
+            self._apply_transform()
+        elif field == "Rotation":
+            self._rotation = to_float(value)
+            self._apply_transform()
+        elif field == "Skew X":
+            self._skew_x = to_float(value)
+            self._apply_transform()
+        elif field == "Skew Y":
+            self._skew_y = to_float(value)
+            self._apply_transform()
+        elif field == "Opacity":
+            self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Shape":
+            self._shape = str(value)
+            self._rebuild_path()
+            self.update()
+        elif field == "Color":
+            self._color = value
+            self._refresh_brush_color()
+            self.update()
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
+        elif field == "Layer":
+            self.set_layer_value(int(to_float(value)))
+
+    def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
+                           base_vals: dict) -> dict:
+        new_w = float(base_vals.get("Width", self._width)) * sx
+        new_h = float(base_vals.get("Height", self._height)) * sy
+        new_x = pivot_x + (float(base_vals.get("X", self._x)) - pivot_x) * sx
+        new_y = pivot_y + (float(base_vals.get("Y", self._y)) - pivot_y) * sy
+        result = {
+            "Width":  int(round(max(1.0, min(2048.0, new_w)))),
+            "Height": int(round(max(1.0, min(2048.0, new_h)))),
+            "X": int(round(max(-1280.0, min(1280.0, new_x)))),
+            "Y": int(round(max(-1280.0, min(1280.0, new_y)))),
+        }
+        for field, val in result.items():
+            self.apply_attr(field, val)
+        return result
+
+    # ── 單選拖曳縮放 hook（Width/Height 像素語意）──────────────────────────────
+
+    def scale_geom(self) -> tuple[float, float]:
+        return self._width, self._height
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return 100.0, 100.0
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = sx_pct
+        csy = sy_pct
+        if geom_w > 0.5:
+            csx = max(1.0, min(2048.0, geom_w * sx_pct / 100.0)) / geom_w * 100.0
+        if geom_h > 0.5:
+            csy = max(1.0, min(2048.0, geom_h * sy_pct / 100.0)) / geom_h * 100.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_w = int(round(max(1.0, min(2048.0, geom_w * new_sx_pct / 100.0))))
+        new_h = int(round(max(1.0, min(2048.0, geom_h * new_sy_pct / 100.0))))
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Width", new_w)
+        self.apply_attr("Height", new_h)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Width": new_w, "Height": new_h, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Width": self._width, "Height": self._height,
+        }
+
+
+# ── MarkerLayer（環形標記）─────────────────────────────────────────────────────
+
+class MarkerLayer(QGraphicsItem, LayerMixin):
+    """
+    繼承 LayerMixin 的環形標記 item。
+    X/Y 為圓心；沿圓周等距放置 Marker count 個標記（0°＝正上方，順時針遞增），
+    每個標記依所在角度徑向旋轉，使外緣（Marker height 方向）朝外，形成類似錶盤刻度的排列
+    （角度／旋轉慣例與 TextRingLayer 一致：rot_deg = angle_deg 使標記隨位置角度同步旋轉）。
+    Squarify 依超橢圓公式將圓形位置往方形擠壓，與 TextRingLayer._squarify_radius 邏輯一致。
+    Shape（Square/Circle/Triangle）與 ShapeLayer 共用同一套視覺定義（Triangle 沿用
+    ShapeLayer._regular_polygon_path，僅平移為以原點置中、頂點朝上）。
+    """
+
+    def __init__(self, values: dict, parent=None):
+        super().__init__(parent)
+        self.__init_layer__()
+        self.can_scale = True
+
+        self._x            = to_float(values.get("X", 0))
+        self._y            = to_float(values.get("Y", 0))
+        self._radius       = max(1.0, to_float(values.get("Radius", 256), 256.0))
+        self._rotation     = to_float(values.get("Rotation", 0))
+        self._skew_x       = to_float(values.get("Skew X", 0))
+        self._skew_y       = to_float(values.get("Skew Y", 0))
+        self._anim_scale_x = to_float(values.get("Anim scale X", 100), 100.0)
+        self._anim_scale_y = to_float(values.get("Anim scale Y", 100), 100.0)
+        self._marker_w      = max(1.0, to_float(values.get("Marker width", 10), 10.0))
+        self._marker_h      = max(1.0, to_float(values.get("Marker height", 35), 35.0))
+        self._count         = max(1, int(round(to_float(values.get("Marker count", 12), 12.0))))
+        self._shape          = str(values.get("Shape", "Square"))
+        self._squarify       = max(0.0, min(100.0, to_float(values.get("Squarify", 0), 0.0)))
+        self._color          = values.get("Color", "ffffff")
+        self._display        = str(values.get("Display", "Always"))
+
+        self._brush_color = QColor(Qt.GlobalColor.white)
+        self._marker_path = QPainterPath()
+        self._items: list[tuple[float, float, float]] = []  # (cx, cy, rot_deg)
+        self._bounding_rect = QRectF()
+
+        self._rebuild_marker_path()
+        self._refresh_brush_color()
+        self._rebuild_layout()
+
+        self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
+        self._layer_value = int(to_float(values.get("Layer", 0)))
+        self._apply_transform()
+        self._refresh_display()
+
+    # ── 內部工具 ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _marker_shape_path(shape: str, w: float, h: float) -> QPainterPath:
+        """建立以原點為中心、朝上（-Y）為外緣方向的標記形狀路徑，與 ShapeLayer 共用相同 Shape 語意。"""
+        if shape == "Circle":
+            path = QPainterPath()
+            path.addEllipse(-w / 2.0, -h / 2.0, w, h)
+            return path
+        if shape == "Triangle":
+            # ShapeLayer._regular_polygon_path 頂點朝上（外側）；標記三角形尖端須朝內（圓心方向），
+            # 故沿水平軸鏡射（三角形左右對稱，僅翻轉 Y 即等效於尖端上下對調）。
+            path = ShapeLayer._regular_polygon_path(w, h, 3).translated(-w / 2.0, -h / 2.0)
+            return QTransform().scale(1, -1).map(path)
+        path = QPainterPath()  # "Square" 及未知形狀 fallback
+        path.addRect(-w / 2.0, -h / 2.0, w, h)
+        return path
+
+    def _rebuild_marker_path(self) -> None:
+        self._marker_path = self._marker_shape_path(self._shape, self._marker_w, self._marker_h)
+
+    def _refresh_brush_color(self) -> None:
+        self._brush_color = _parse_hex_color(self._color)
+
+    def _squarify_radius(self, angle_deg: float) -> float:
+        """依超橢圓（Lamé curve）公式將圓形半徑往方形擠壓；與 TextRingLayer._squarify_radius 一致。"""
+        t = (self._squarify - 1.0) / 99.0
+        n = 2.0 + 10.0 * (t ** 2)
+        rad = math.radians(angle_deg)
+        c, s = abs(math.cos(rad)), abs(math.sin(rad))
+        denom = (c ** n + s ** n) ** (1.0 / n)
+        return self._radius / denom if denom > 1e-9 else self._radius
+
+    def _rebuild_layout(self) -> None:
+        """重新計算每個標記的位置與徑向旋轉角，並算出精確 boundingRect
+        （原點＝圓心，未套用 Rotation/Skew/Anim scale）。
+        """
+        count = self._count
+        step = 360.0 / count
+        local_bounds = self._marker_path.boundingRect()
+
+        items: list[tuple[float, float, float]] = []
+        bounds = QRectF()
+        for i in range(count):
+            angle = i * step
+            r = self._squarify_radius(angle)
+            rad = math.radians(angle)
+            cx = r * math.sin(rad)
+            cy = -r * math.cos(rad)
+            items.append((cx, cy, angle))
+
+            t = QTransform()
+            t.translate(cx, cy)
+            t.rotate(angle)
+            bounds = bounds.united(t.mapRect(local_bounds))
+
+        self._items = items
+        self._bounding_rect = bounds
+
+    def _apply_transform(self) -> None:
+        """縮放/旋轉/傾斜一律以圓心（局部原點）為軸，最後平移至 (X,Y)。
+        與 TextRingLayer._apply_transform 邏輯一致。
+        """
+        sx = self._anim_scale_x / 100.0
+        sy = self._anim_scale_y / 100.0
+        sh_x = math.tan(math.radians(self._skew_x))
+        sh_y = math.tan(math.radians(self._skew_y))
+
+        t = QTransform()
+        t.translate(self._x, self._y)
+        t.rotate(self._rotation)
+        t.scale(sx, sy)
+        t.shear(sh_x, sh_y)
+        self.setTransform(t)
+
+    # ── QGraphicsItem 必要覆寫 ────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        return self._bounding_rect
+
+    def paint(self, painter, option, widget=None) -> None:
+        if not self._items:
+            return
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(self._brush_color))
+        for cx, cy, rot_deg in self._items:
+            painter.save()
+            painter.translate(cx, cy)
+            painter.rotate(rot_deg)
+            painter.drawPath(self._marker_path)
+            painter.restore()
+
+    # ── LayerMixin 覆寫 ────────────────────────────────────────────────────────
+
+    def apply_attr(self, field: str, value) -> None:
+        if field == "X":
+            self._x = to_float(value)
+            self._apply_transform()
+        elif field == "Y":
+            self._y = to_float(value)
+            self._apply_transform()
+        elif field == "Radius":
+            self.prepareGeometryChange()
+            self._radius = max(1.0, to_float(value, self._radius))
+            self._rebuild_layout()
+        elif field == "Marker count":
+            self.prepareGeometryChange()
+            self._count = max(1, int(round(to_float(value, self._count))))
+            self._rebuild_layout()
+        elif field == "Squarify":
+            self.prepareGeometryChange()
+            self._squarify = max(0.0, min(100.0, to_float(value, self._squarify)))
+            self._rebuild_layout()
+        elif field == "Marker width":
+            self.prepareGeometryChange()
+            self._marker_w = max(1.0, to_float(value, self._marker_w))
+            self._rebuild_marker_path()
+            self._rebuild_layout()
+        elif field == "Marker height":
+            self.prepareGeometryChange()
+            self._marker_h = max(1.0, to_float(value, self._marker_h))
+            self._rebuild_marker_path()
+            self._rebuild_layout()
+        elif field == "Shape":
+            self.prepareGeometryChange()
+            self._shape = str(value)
+            self._rebuild_marker_path()
+            self._rebuild_layout()
+        elif field == "Color":
+            self._color = value
+            self._refresh_brush_color()
+            self.update()
+        elif field == "Rotation":
+            self._rotation = to_float(value)
+            self._apply_transform()
+        elif field == "Skew X":
+            self._skew_x = to_float(value)
+            self._apply_transform()
+        elif field == "Skew Y":
+            self._skew_y = to_float(value)
+            self._apply_transform()
+        elif field == "Anim scale X":
+            self._anim_scale_x = to_float(value, self._anim_scale_x)
+            self._apply_transform()
+        elif field == "Anim scale Y":
+            self._anim_scale_y = to_float(value, self._anim_scale_y)
+            self._apply_transform()
+        elif field == "Opacity":
+            self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
+        elif field == "Layer":
+            self.set_layer_value(int(to_float(value)))
+
+    def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
+                           base_vals: dict) -> dict:
+        new_anim_sx = float(base_vals.get("Anim scale X", self._anim_scale_x)) * sx
+        new_anim_sy = float(base_vals.get("Anim scale Y", self._anim_scale_y)) * sy
+        new_x = pivot_x + (float(base_vals.get("X", self._x)) - pivot_x) * sx
+        new_y = pivot_y + (float(base_vals.get("Y", self._y)) - pivot_y) * sy
+        result = {
+            "Anim scale X": int(round(max(-2048.0, min(2048.0, new_anim_sx)))),
+            "Anim scale Y": int(round(max(-2048.0, min(2048.0, new_anim_sy)))),
+            "X": int(round(max(-1280.0, min(1280.0, new_x)))),
+            "Y": int(round(max(-1280.0, min(1280.0, new_y)))),
+        }
+        for field, val in result.items():
+            self.apply_attr(field, val)
+        return result
+
+    # ── 單選拖曳縮放 hook（Anim scale 百分比語意）───────────────────────────────
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return self._anim_scale_x, self._anim_scale_y
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = max(-2048.0, min(2048.0, sx_pct))
+        csy = max(-2048.0, min(2048.0, sy_pct))
+        if csx == 0:
+            csx = 1.0 if sx_pct >= 0 else -1.0
+        if csy == 0:
+            csy = 1.0 if sy_pct >= 0 else -1.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_sx = int(round(max(-2048.0, min(2048.0, new_sx_pct))))
+        new_sy = int(round(max(-2048.0, min(2048.0, new_sy_pct))))
+        if new_sx == 0:
+            new_sx = 1 if new_sx_pct >= 0 else -1
+        if new_sy == 0:
+            new_sy = 1 if new_sy_pct >= 0 else -1
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Anim scale X", new_sx)
+        self.apply_attr("Anim scale Y", new_sy)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Anim scale X": new_sx, "Anim scale Y": new_sy, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Anim scale X": self._anim_scale_x, "Anim scale Y": self._anim_scale_y,
+        }
+
+
+# ── TachymeterLayer（測速計）───────────────────────────────────────────────────
+
+class TachymeterLayer(QGraphicsItem, LayerMixin):
+    """
+    繼承 LayerMixin 的測速計 item。
+    X/Y 為圓心；Speeds 為逗號分隔的速度值列表，依真實測速計非線性公式
+    angle_deg = 21600 / speed 換算每個速度對應的角度（0°＝正上方，順時針遞增；
+    速度越高換算角度越小，越靠近頂部）。無法解析或 ≤0 的項目略過。
+    每個速度位置繪出一個數字標籤（Text rotation 決定自轉方式，與 TextRingLayer 一致）
+    與一個 Major marker 刻度；相鄰兩個速度之間的角度區間再均勻插入 4 個 Minor marker
+    （角度最小與最大的兩個速度之間的缺口不補刻度，改放 Text 標題文字，沿圓弧彎曲排列，
+    置中於缺口——與真實計時碼錶測速計錶圈上 "TACHYMETER" 字樣位置一致）。
+    Major/Minor markers 的 None/Tiny/Small/Medium/Large/XLarge 為徑向矩形刻度的大小分級
+    （依 _SIZE_MULT 縮放 Marker width/height）；Circle/Triangle 則改以 Med大小畫出對應形狀
+    （沿用 MarkerLayer._marker_shape_path，Triangle 頂點徑向朝外）。
+    Squarify 公式與 TextRingLayer._squarify_radius 一致。
+    """
+
+    _SIZE_MULT: dict[str, float] = {
+        "Tiny": 0.4, "Small": 0.6, "Medium": 0.8, "Large": 1.0, "XLarge": 1.3,
+    }
+
+    _TEXT_MARKER_GAP: float = 10.0  # 數字標籤下緣與刻度外緣之間固定保留的像素間距
+
+    _H_GROUP = CurvedTextLayer._H_GROUP
+
+    def __init__(self, values: dict, parent=None):
+        super().__init__(parent)
+        self.__init_layer__()
+        self.can_scale = True
+
+        self._x            = to_float(values.get("X", 0))
+        self._y            = to_float(values.get("Y", 0))
+        self._radius       = max(1.0, to_float(values.get("Radius", 230), 230.0))
+        self._rotation     = to_float(values.get("Rotation", 0))
+        self._skew_x       = to_float(values.get("Skew X", 0))
+        self._skew_y       = to_float(values.get("Skew Y", 0))
+        self._anim_scale_x = to_float(values.get("Anim scale X", 100), 100.0)
+        self._anim_scale_y = to_float(values.get("Anim scale Y", 100), 100.0)
+        self._text          = to_str(str(values.get("Text", "")))
+        self._font_name      = str(values.get("Font", ""))
+        self._font_size      = int(to_float(values.get("Text size", 25), 25.0))
+        self._color_day       = values.get("Color", "ffffff")
+        self._color_dim       = values.get("Color dim", "ffffff")
+        self._alignment       = str(values.get("Alignment", "Center"))
+        self._marker_w         = max(1.0, to_float(values.get("Marker width", 10), 10.0))
+        self._marker_h         = max(1.0, to_float(values.get("Marker height", 10), 10.0))
+        self._major_markers    = str(values.get("Major markers", "Medium"))
+        self._minor_markers    = str(values.get("Minor markers", "Medium"))
+        self._speeds_str        = str(values.get("Speeds", "") or "")
+        self._custom_speeds      = str(values.get("Custom speeds", "") or "")
+        self._text_rotation      = str(values.get("Text rotation", "Rotate Upright"))
+        self._squarify           = max(1.0, min(100.0, to_float(values.get("Squarify", 1), 1.0)))
+        self._display            = str(values.get("Display", "Always"))
+
+        self._font = QFont()
+        self._brush_color = QColor(Qt.GlobalColor.white)
+        self._number_items: list[tuple[str, float, float, float, QRectF]] = []
+        self._tick_items: list[tuple[QPainterPath, float, float, float]] = []
+        self._chars: list[tuple[str, float, float, float, float, float, float]] = []
+        self._bounding_rect = QRectF()
+
+        self._apply_font()
+        self._refresh_color()
+        self._rebuild_layout()
+
+        self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
+        self._layer_value = int(to_float(values.get("Layer", 0)))
+        self._apply_transform()
+        self._refresh_display()
+
+    # ── 內部工具 ──────────────────────────────────────────────────────────────
+
+    def _apply_font(self) -> None:
+        # 延遲匯入避免 components → special_ui 的循環依賴
+        from special_ui import FontManager
+        family = FontManager().get_font_family(self._font_name) or self._font_name
+        font = QFont(family)
+        font.setPixelSize(self._font_size)
+        self._font = font
+
+    def _apply_color(self, hex_val) -> None:
+        self._brush_color = _parse_hex_color(hex_val)
+        self.update()
+
+    def _refresh_color(self) -> None:
+        """依 manager.is_dark_mode 決定顯示 Color（day）或 Color dim（night）。"""
+        manager = self._get_manager()
+        is_night = bool(manager.is_dark_mode) if manager is not None else False
+        self._apply_color(self._color_dim if is_night else self._color_day)
+
+    def _parse_speeds(self) -> list[tuple[float, float]]:
+        """解析 Speeds（逗號分隔字串），回傳依角度升冪排序的 (speed, angle_deg) list；
+        Speeds 選到 "Custom" 時改讀 Custom speeds 欄位的值（與 Numbers/textRingLayer
+        的 Ring type="Custom (x to y)" 改讀 Custom start/end 邏輯一致）。
+        無法解析成正數的片段直接略過。
+        """
+        speeds_str = self._custom_speeds if self._speeds_str == "Custom" else self._speeds_str
+        result: list[tuple[float, float]] = []
+        for tok in speeds_str.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            try:
+                speed = float(tok)
+            except ValueError:
+                continue
+            if speed <= 0:
+                continue
+            result.append((speed, 21600.0 / speed))
+        result.sort(key=lambda p: p[1])
+        return result
+
+    def _marker_path_for(self, preset: str, base_w: float, base_h: float) -> "QPainterPath | None":
+        """依 Major/Minor markers 選項建立刻度形狀路徑；None 回傳 None（不繪製）。
+        外緣（朝外/-Y 側）固定距離數字標籤下緣 _TEXT_MARKER_GAP px，Marker height 變化時
+        只向內（+Y，往圓心方向）延伸，避免刻度變長時往外蓋住數字標籤。
+        """
+        if not preset or preset == "None":
+            return None
+        if preset in ("Circle", "Triangle"):
+            mult = self._SIZE_MULT["Medium"]
+            w, h = base_w * mult, base_h * mult
+            path = MarkerLayer._marker_shape_path(preset, w, h)
+        else:
+            mult = self._SIZE_MULT.get(preset, 1.0)
+            w, h = base_w * mult, base_h * mult
+            path = MarkerLayer._marker_shape_path("Square", w, h)
+        descent = QFontMetricsF(self._font).descent()
+        return path.translated(0.0, h / 2.0 + descent + self._TEXT_MARKER_GAP)
+
+    def _squarify_radius(self, angle_deg: float) -> float:
+        """依超橢圓（Lamé curve）公式將圓形半徑往方形擠壓；與 TextRingLayer._squarify_radius 一致。"""
+        t = (self._squarify - 1.0) / 99.0
+        n = 2.0 + 10.0 * (t ** 2)
+        rad = math.radians(angle_deg)
+        c, s = abs(math.cos(rad)), abs(math.sin(rad))
+        denom = (c ** n + s ** n) ** (1.0 / n)
+        return self._radius / denom if denom > 1e-9 else self._radius
+
+    def _item_rotation(self, angle_deg: float) -> float:
+        """數字標籤自轉方式；與 TextRingLayer._item_rotation 邏輯一致。"""
+        style = self._text_rotation
+        if style == "Rotate":
+            return angle_deg
+        if style == "Rotate Inverse":
+            return angle_deg + 180.0
+        if style == "Rotate Upright":
+            a = angle_deg % 360.0
+            return angle_deg if (a <= 90.0 or a >= 270.0) else angle_deg + 180.0
+        return 0.0  # "Upright"
+
+    def _layout_title(self, gap_start: float, gap_end: float) -> QRectF:
+        """將 Text 標題文字沿圓弧置於 [gap_start, gap_end] 缺口內（依 Alignment 左/中/右對齊），
+        回傳其 boundingRect（未套用 Rotation/Skew/Anim scale）。邏輯與 CurvedTextLayer
+        Direction="Up" 時一致，只是排列範圍限縮在缺口內而非整個圓周。
+        """
+        fm = QFontMetricsF(self._font)
+        text = self._text
+        widths = [fm.horizontalAdvance(ch) for ch in text]
+        radius = self._radius
+        total_angle = math.degrees(sum(widths) / radius) if radius > 0 else 0.0
+
+        span = gap_end - gap_start
+        h_group = self._H_GROUP.get(self._alignment, "center")
+        if h_group == "left":
+            start_angle = gap_start
+        elif h_group == "right":
+            start_angle = gap_end - total_angle
+        else:
+            start_angle = gap_start + (span - total_angle) / 2.0
+
+        ascent, descent = fm.ascent(), fm.descent()
+        chars: list[tuple[str, float, float, float, float, float, float]] = []
+        bounds = QRectF()
+        running = start_angle
+        for ch, w in zip(text, widths):
+            span_deg = math.degrees(w / radius) if radius > 0 else 0.0
+            center_angle = running + span_deg / 2.0
+            running += span_deg
+
+            rad = math.radians(center_angle)
+            cx, cy = radius * math.sin(rad), -radius * math.cos(rad)
+            chars.append((ch, cx, cy, center_angle, w, ascent, descent))
+
+            t = QTransform()
+            t.translate(cx, cy)
+            t.rotate(center_angle)
+            local_rect = QRectF(-w / 2.0, -ascent, w, ascent + descent)
+            bounds = bounds.united(t.mapRect(local_rect))
+
+        self._chars = chars
+        return bounds
+
+    def _rebuild_layout(self) -> None:
+        """重新計算數字標籤、Major/Minor markers 刻度與標題文字的位置，並算出精確 boundingRect
+        （原點＝圓心，未套用 Rotation/Skew/Anim scale）。
+        """
+        speeds = self._parse_speeds()
+        fm = QFontMetricsF(self._font)
+        ascent, descent = fm.ascent(), fm.descent()
+
+        major_path = self._marker_path_for(self._major_markers, self._marker_w, self._marker_h)
+        minor_path = self._marker_path_for(self._minor_markers, self._marker_w, self._marker_h)
+
+        number_items: list[tuple[str, float, float, float, QRectF]] = []
+        tick_items: list[tuple[QPainterPath, float, float, float]] = []
+        bounds = QRectF()
+
+        def _place_tick(path: "QPainterPath | None", angle: float) -> None:
+            nonlocal bounds
+            if path is None:
+                return
+            r = self._squarify_radius(angle)
+            rad = math.radians(angle)
+            cx, cy = r * math.sin(rad), -r * math.cos(rad)
+            tick_items.append((path, cx, cy, angle))
+            t = QTransform()
+            t.translate(cx, cy)
+            t.rotate(angle)
+            bounds = bounds.united(t.mapRect(path.boundingRect()))
+
+        h = ascent + descent
+        for speed, angle in speeds:
+            text = str(int(speed)) if speed == int(speed) else str(speed)
+            r = self._squarify_radius(angle)
+            rad = math.radians(angle)
+            cx, cy = r * math.sin(rad), -r * math.cos(rad)
+            rot_deg = self._item_rotation(angle)
+            w = fm.horizontalAdvance(text)
+            # 矩形須以原點（環上位置）垂直置中，而非依 ascent/descent 偏移；
+            # 否則 Rotate Upright 下半部因額外 +180° 翻轉，文字中心會偏移到 Rotate 模式的對稱位置，造成錯位。
+            local_rect = QRectF(-w / 2.0, -h / 2.0, w, h)
+            number_items.append((text, cx, cy, rot_deg, local_rect))
+
+            t = QTransform()
+            t.translate(cx, cy)
+            t.rotate(rot_deg)
+            bounds = bounds.united(t.mapRect(local_rect))
+
+            _place_tick(major_path, angle)
+
+        for (_s1, a1), (_s2, a2) in zip(speeds, speeds[1:]):
+            step = (a2 - a1) / 5.0
+            for k in range(1, 5):
+                _place_tick(minor_path, a1 + k * step)
+
+        if len(speeds) >= 2:
+            gap_start = speeds[-1][1]
+            gap_end = speeds[0][1] + 360.0
+        else:
+            gap_start, gap_end = 0.0, 360.0
+        bounds = bounds.united(self._layout_title(gap_start, gap_end))
+
+        self._number_items = number_items
+        self._tick_items = tick_items
+        self._bounding_rect = bounds
+
+    def _apply_transform(self) -> None:
+        """縮放/旋轉/傾斜一律以圓心（局部原點）為軸，最後平移至 (X,Y)。
+        與 TextRingLayer._apply_transform 邏輯一致。
+        """
+        sx = self._anim_scale_x / 100.0
+        sy = self._anim_scale_y / 100.0
+        sh_x = math.tan(math.radians(self._skew_x))
+        sh_y = math.tan(math.radians(self._skew_y))
+
+        t = QTransform()
+        t.translate(self._x, self._y)
+        t.rotate(self._rotation)
+        t.scale(sx, sy)
+        t.shear(sh_x, sh_y)
+        self.setTransform(t)
+
+    # ── QGraphicsItem 必要覆寫 ────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        return self._bounding_rect
+
+    def paint(self, painter, option, widget=None) -> None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(self._brush_color))
+        for path, cx, cy, rot_deg in self._tick_items:
+            painter.save()
+            painter.translate(cx, cy)
+            painter.rotate(rot_deg)
+            painter.drawPath(path)
+            painter.restore()
+
+        painter.setFont(self._font)
+        painter.setPen(QPen(self._brush_color))
+        for text, cx, cy, rot_deg, local_rect in self._number_items:
+            painter.save()
+            painter.translate(cx, cy)
+            painter.rotate(rot_deg)
+            painter.drawText(local_rect, Qt.AlignmentFlag.AlignCenter, text)
+            painter.restore()
+        for ch, cx, cy, rot_deg, w, chr_ascent, chr_descent in self._chars:
+            if ch.isspace():
+                continue
+            painter.save()
+            painter.translate(cx, cy)
+            painter.rotate(rot_deg)
+            rect = QRectF(-w / 2.0, -chr_ascent, w, chr_ascent + chr_descent)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, ch)
+            painter.restore()
+
+    # ── LayerMixin 覆寫 ────────────────────────────────────────────────────────
+
+    _LAYOUT_FIELDS = frozenset({
+        "Marker width", "Marker height", "Major markers", "Minor markers",
+        "Speeds", "Custom speeds", "Text rotation", "Squarify", "Alignment",
+    })
+
+    def apply_attr(self, field: str, value) -> None:
+        if field == "X":
+            self._x = to_float(value)
+            self._apply_transform()
+        elif field == "Y":
+            self._y = to_float(value)
+            self._apply_transform()
+        elif field == "Radius":
+            self.prepareGeometryChange()
+            self._radius = max(1.0, to_float(value, self._radius))
+            self._rebuild_layout()
+        elif field == "Text":
+            self.prepareGeometryChange()
+            self._text = to_str(str(value))
+            self._rebuild_layout()
+        elif field in self._LAYOUT_FIELDS:
+            self.prepareGeometryChange()
+            if field == "Marker width":
+                self._marker_w = max(1.0, to_float(value, self._marker_w))
+            elif field == "Marker height":
+                self._marker_h = max(1.0, to_float(value, self._marker_h))
+            elif field == "Major markers":
+                self._major_markers = str(value)
+            elif field == "Minor markers":
+                self._minor_markers = str(value)
+            elif field == "Speeds":
+                self._speeds_str = str(value or "")
+            elif field == "Custom speeds":
+                self._custom_speeds = str(value or "")
+            elif field == "Text rotation":
+                self._text_rotation = str(value)
+            elif field == "Squarify":
+                self._squarify = max(1.0, min(100.0, to_float(value, self._squarify)))
+            elif field == "Alignment":
+                self._alignment = str(value)
+            self._rebuild_layout()
+        elif field == "Font":
+            self._font_name = str(value)
+            self._apply_font()
+            self.prepareGeometryChange()
+            self._rebuild_layout()
+        elif field == "Text size":
+            self._font_size = int(to_float(value, self._font_size))
+            self._apply_font()
+            self.prepareGeometryChange()
+            self._rebuild_layout()
+        elif field == "Color":
+            self._color_day = value
+            self._refresh_color()
+        elif field == "Color dim":
+            self._color_dim = value
+            self._refresh_color()
+        elif field == "Rotation":
+            self._rotation = to_float(value)
+            self._apply_transform()
+        elif field == "Skew X":
+            self._skew_x = to_float(value)
+            self._apply_transform()
+        elif field == "Skew Y":
+            self._skew_y = to_float(value)
+            self._apply_transform()
+        elif field == "Anim scale X":
+            self._anim_scale_x = to_float(value, self._anim_scale_x)
+            self._apply_transform()
+        elif field == "Anim scale Y":
+            self._anim_scale_y = to_float(value, self._anim_scale_y)
+            self._apply_transform()
+        elif field == "Opacity":
+            self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
+        elif field == "Layer":
+            self.set_layer_value(int(to_float(value)))
+
+    def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
+                           base_vals: dict) -> dict:
+        new_anim_sx = float(base_vals.get("Anim scale X", self._anim_scale_x)) * sx
+        new_anim_sy = float(base_vals.get("Anim scale Y", self._anim_scale_y)) * sy
+        new_x = pivot_x + (float(base_vals.get("X", self._x)) - pivot_x) * sx
+        new_y = pivot_y + (float(base_vals.get("Y", self._y)) - pivot_y) * sy
+        result = {
+            "Anim scale X": int(round(max(-2048.0, min(2048.0, new_anim_sx)))),
+            "Anim scale Y": int(round(max(-2048.0, min(2048.0, new_anim_sy)))),
+            "X": int(round(max(-1280.0, min(1280.0, new_x)))),
+            "Y": int(round(max(-1280.0, min(1280.0, new_y)))),
+        }
+        for field, val in result.items():
+            self.apply_attr(field, val)
+        return result
+
+    # ── 單選拖曳縮放 hook（Anim scale 百分比語意）───────────────────────────────
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return self._anim_scale_x, self._anim_scale_y
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = max(-2048.0, min(2048.0, sx_pct))
+        csy = max(-2048.0, min(2048.0, sy_pct))
+        if csx == 0:
+            csx = 1.0 if sx_pct >= 0 else -1.0
+        if csy == 0:
+            csy = 1.0 if sy_pct >= 0 else -1.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_sx = int(round(max(-2048.0, min(2048.0, new_sx_pct))))
+        new_sy = int(round(max(-2048.0, min(2048.0, new_sy_pct))))
+        if new_sx == 0:
+            new_sx = 1 if new_sx_pct >= 0 else -1
+        if new_sy == 0:
+            new_sy = 1 if new_sy_pct >= 0 else -1
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Anim scale X", new_sx)
+        self.apply_attr("Anim scale Y", new_sy)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Anim scale X": new_sx, "Anim scale Y": new_sy, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Anim scale X": self._anim_scale_x, "Anim scale Y": self._anim_scale_y,
+        }
+
+
+# ── RoundedRectangleLayer（圓角矩形）───────────────────────────────────────────
+
+# Corner type（1~15）：數值對應「非圓角（直角）」的角落組合。
+# rt=右上(TR) lt=左上(TL) rb=右下(BR) lb=左下(BL)；! 前綴代表「除了該角以外都是直角」。
+# 1=全部圓角 2=全部直角 3=rt 4=lt 5=rb 6=lb 7=rt+lt 8=rb+lb 9=rt+rb 10=lt+lb
+# 11=lt+rb 12=rt+lb 13=!lb(即 lt+tr+rb 直角) 14=!rb 15=!lt
+_CORNER_TYPE_SQUARE: dict[int, frozenset[str]] = {
+    1:  frozenset(),
+    2:  frozenset({"TR"}),
+    3:  frozenset({"TL"}),
+    4:  frozenset({"BR"}),
+    5:  frozenset({"BL"}),
+    6:  frozenset({"TR", "TL"}),
+    7:  frozenset({"BR", "BL"}),
+    8:  frozenset({"TR", "BR"}),
+    9:  frozenset({"TL", "BL"}),
+    10: frozenset({"TL", "BR"}),
+    11: frozenset({"TR", "BL"}),
+    12: frozenset({"TL", "TR", "BR"}),
+    13: frozenset({"TL", "TR", "BL"}),
+    14: frozenset({"TR", "BR", "BL"}),
+    15: frozenset({"TL", "BR", "BL"}),
+}
+
+
+class RoundedRectangleLayer(QGraphicsItem, LayerMixin):
+    """
+    繼承 LayerMixin 的圓角矩形 item。
+    X/Y 為錨點座標；錨點位置由 Alignment 欄位決定（與 ShapeLayer 共用同一套 _ANCHOR）。
+    Corner radius 為圓角半徑，Corner type 決定哪些角落套用圓角、哪些維持直角
+    （見 _CORNER_TYPE_SQUARE）。
+    """
+
+    _ANCHOR = TextLayer._ANCHOR
+
+    def __init__(self, values: dict, parent=None):
+        super().__init__(parent)
+        self.__init_layer__()
+        self.can_scale = True
+
+        self._x         = to_float(values.get("X", 0))
+        self._y         = to_float(values.get("Y", 0))
+        self._width     = max(1.0, to_float(values.get("Width", 100), 100.0))
+        self._height    = max(1.0, to_float(values.get("Height", 100), 100.0))
+        self._radius    = max(0.0, to_float(values.get("Corner radius", 0)))
+        self._corner_type = self._eval_corner_type(values.get("Corner type", 1))
+        self._alignment = str(values.get("Alignment", "Center"))
+        self._rotation  = to_float(values.get("Rotation", 0))
+        self._skew_x    = to_float(values.get("Skew X", 0))
+        self._skew_y    = to_float(values.get("Skew Y", 0))
+        self._color     = values.get("Color", "ffffff")
+        self._display   = str(values.get("Display", "Always"))
+
+        self._path = QPainterPath()
+        self._brush_color = QColor(Qt.GlobalColor.white)
+        self._rebuild_path()
+        self._refresh_brush_color()
+
+        self.setOpacity(max(0.0, min(1.0, to_float(values.get("Opacity", 100), 100.0) / 100.0)))
+        self._layer_value = int(to_float(values.get("Layer", 0)))
+        self._apply_transform()
+        self._refresh_display()
+
+    # ── 內部工具 ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _eval_corner_type(value) -> int:
+        return int(round(to_float(value, 1.0)))
+
+    def _rebuild_path(self) -> None:
+        w, h = self._width, self._height
+        r = max(0.0, min(self._radius, w / 2.0, h / 2.0))
+        square = _CORNER_TYPE_SQUARE.get(self._corner_type, frozenset())
+
+        path = QPainterPath()
+        if r <= 0.0 or square == frozenset({"TL", "TR", "BR", "BL"}):
+            path.addRect(0, 0, w, h)
+            self._path = path
+            return
+
+        if "TL" in square:
+            path.moveTo(0, 0)
+        else:
+            path.moveTo(0, r)
+            path.arcTo(QRectF(0, 0, 2 * r, 2 * r), 180, -90)
+        if "TR" in square:
+            path.lineTo(w, 0)
+        else:
+            path.lineTo(w - r, 0)
+            path.arcTo(QRectF(w - 2 * r, 0, 2 * r, 2 * r), 90, -90)
+        if "BR" in square:
+            path.lineTo(w, h)
+        else:
+            path.lineTo(w, h - r)
+            path.arcTo(QRectF(w - 2 * r, h - 2 * r, 2 * r, 2 * r), 0, -90)
+        if "BL" in square:
+            path.lineTo(0, h)
+        else:
+            path.lineTo(r, h)
+            path.arcTo(QRectF(0, h - 2 * r, 2 * r, 2 * r), -90, -90)
+        path.closeSubpath()
+        self._path = path
+
+    def _refresh_brush_color(self) -> None:
+        self._brush_color = _parse_hex_color(self._color)
+
+    def _apply_transform(self) -> None:
+        """變換矩陣順序：傾斜(繞中心) → 對齊(錨點移至原點) → 旋轉 → 平移(X,Y)。
+        與 ShapeLayer._apply_transform 邏輯一致。
+        """
+        w, h = self._width, self._height
+        fx, fy = self._ANCHOR.get(self._alignment, (-0.5, -0.5))
+        ax, ay = fx * w, fy * h
+
+        sh_x = math.tan(math.radians(self._skew_x))
+        sh_y = math.tan(math.radians(self._skew_y))
+
+        t = QTransform()
+        t.translate(self._x, self._y)
+        t.rotate(self._rotation)
+        t.translate(ax + w / 2, ay + h / 2)
+        t.shear(sh_x, sh_y)
+        t.translate(-w / 2, -h / 2)
+        self.setTransform(t)
+
+    # ── QGraphicsItem 必要覆寫 ────────────────────────────────────────────────
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self._width, self._height)
+
+    def paint(self, painter, option, widget=None) -> None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(self._brush_color))
+        painter.drawPath(self._path)
+
+    # ── LayerMixin 覆寫 ────────────────────────────────────────────────────────
+
+    def apply_attr(self, field: str, value) -> None:
+        if field == "X":
+            self._x = to_float(value)
+            self._apply_transform()
+        elif field == "Y":
+            self._y = to_float(value)
+            self._apply_transform()
+        elif field == "Width":
+            self.prepareGeometryChange()
+            self._width = max(1.0, to_float(value, self._width))
+            self._rebuild_path()
+            self._apply_transform()
+        elif field == "Height":
+            self.prepareGeometryChange()
+            self._height = max(1.0, to_float(value, self._height))
+            self._rebuild_path()
+            self._apply_transform()
+        elif field == "Corner radius":
+            self._radius = max(0.0, to_float(value, self._radius))
+            self._rebuild_path()
+            self.update()
+        elif field == "Corner type":
+            self._corner_type = self._eval_corner_type(value)
+            self._rebuild_path()
+            self.update()
+        elif field == "Alignment":
+            self._alignment = str(value)
+            self._apply_transform()
+        elif field == "Rotation":
+            self._rotation = to_float(value)
+            self._apply_transform()
+        elif field == "Skew X":
+            self._skew_x = to_float(value)
+            self._apply_transform()
+        elif field == "Skew Y":
+            self._skew_y = to_float(value)
+            self._apply_transform()
+        elif field == "Opacity":
+            self.setOpacity(max(0.0, min(1.0, to_float(value, 100.0) / 100.0)))
+        elif field == "Color":
+            self._color = value
+            self._refresh_brush_color()
+            self.update()
+        elif field == "Display":
+            self._display = str(value)
+            self._refresh_display()
+        elif field == "Layer":
+            self.set_layer_value(int(to_float(value)))
+
+    def apply_scale_factor(self, sx: float, sy: float, pivot_x: float, pivot_y: float,
+                           base_vals: dict) -> dict:
+        new_w = float(base_vals.get("Width", self._width)) * sx
+        new_h = float(base_vals.get("Height", self._height)) * sy
+        new_x = pivot_x + (float(base_vals.get("X", self._x)) - pivot_x) * sx
+        new_y = pivot_y + (float(base_vals.get("Y", self._y)) - pivot_y) * sy
+        result = {
+            "Width":  int(round(max(1.0, min(2048.0, new_w)))),
+            "Height": int(round(max(1.0, min(2048.0, new_h)))),
+            "X": int(round(max(-1280.0, min(1280.0, new_x)))),
+            "Y": int(round(max(-1280.0, min(1280.0, new_y)))),
+        }
+        for field, val in result.items():
+            self.apply_attr(field, val)
+        return result
+
+    # ── 單選拖曳縮放 hook（Width/Height 像素語意）──────────────────────────────
+
+    def scale_geom(self) -> tuple[float, float]:
+        return self._width, self._height
+
+    def get_scale_pct(self) -> tuple[float, float]:
+        return 100.0, 100.0
+
+    def clamp_scale_pct(self, sx_pct: float, sy_pct: float,
+                        geom_w: float, geom_h: float) -> tuple[float, float]:
+        csx = sx_pct
+        csy = sy_pct
+        if geom_w > 0.5:
+            csx = max(1.0, min(2048.0, geom_w * sx_pct / 100.0)) / geom_w * 100.0
+        if geom_h > 0.5:
+            csy = max(1.0, min(2048.0, geom_h * sy_pct / 100.0)) / geom_h * 100.0
+        return csx, csy
+
+    def apply_drag_scale(self, new_sx_pct: float, new_sy_pct: float,
+                         new_x: float, new_y: float,
+                         geom_w: float, geom_h: float) -> dict:
+        new_w = int(round(max(1.0, min(2048.0, geom_w * new_sx_pct / 100.0))))
+        new_h = int(round(max(1.0, min(2048.0, geom_h * new_sy_pct / 100.0))))
+        nx = int(round(max(-1280.0, min(1280.0, new_x))))
+        ny = int(round(max(-1280.0, min(1280.0, new_y))))
+        self.apply_attr("Width", new_w)
+        self.apply_attr("Height", new_h)
+        self.apply_attr("X", nx)
+        self.apply_attr("Y", ny)
+        return {"Width": new_w, "Height": new_h, "X": nx, "Y": ny}
+
+    def scale_result_values(self) -> dict:
+        return {
+            "X": self._x, "Y": self._y, "Rotation": self._rotation,
+            "Width": self._width, "Height": self._height,
+        }
 
 
 # ── 可排序的橢圓圖層 item ──────────────────────────────────────────────────────
@@ -521,7 +3151,7 @@ class _SelectionOverlay(QGraphicsItem):
                 pass
         self._target       = item
         self._manager      = manager
-        self._show_handles = isinstance(item, TextLayer)
+        self._show_handles = getattr(item, "can_scale", False)
         manager.attr_changed.connect(self._on_attr_changed)
         self._update_geometry()
 
@@ -709,13 +3339,7 @@ class _SelectionOverlay(QGraphicsItem):
         handle_idx = self._hit_handle(lp)
         is_rot     = self._is_rotation_zone(lp)
 
-        self._drag_start_vals = {
-            "X":            self._target._x,
-            "Y":            self._target._y,
-            "Rotation":     self._target._rotation,
-            "Anim scale X": self._target._anim_scale_x,
-            "Anim scale Y": self._target._anim_scale_y,
-        }
+        self._drag_start_vals   = self._target.scale_result_values()
         self._drag_start_scene  = event.scenePos()
         self._drag_start_center = self.scenePos()
         self._drag_handle_idx   = handle_idx
@@ -776,14 +3400,11 @@ class _SelectionOverlay(QGraphicsItem):
             }
         else:
             end_vals = {
-                "X":            int(round(self._target._x)),
-                "Y":            int(round(self._target._y)),
-                "Rotation":     int(round(self._target._rotation)),
-                "Anim scale X": int(round(self._target._anim_scale_x)),
-                "Anim scale Y": int(round(self._target._anim_scale_y)),
+                f: (int(round(v)) if isinstance(v, (int, float)) else v)
+                for f, v in self._target.scale_result_values().items()
             }
         changed = [f for f in end_vals
-                   if abs(end_vals[f] - self._drag_start_vals.get(f, 0)) > 1e-6]
+                   if abs(float(end_vals[f]) - float(self._drag_start_vals.get(f, 0))) > 1e-6]
 
         if changed:
             for field in changed:
@@ -851,14 +3472,14 @@ class _SelectionOverlay(QGraphicsItem):
     def _init_scale_drag(self, handle_idx: int) -> None:
         """mousePressEvent 時預計算縮放拖曳所需的固定數值。"""
         t  = self._target
-        br = t.boundingRect()
-        W, H = br.width(), br.height()
+        W, H = t.scale_geom()
         if W < 0.5 or H < 0.5:
             return
 
+        scale_x0, scale_y0 = t.get_scale_pct()
         R   = math.radians(t._rotation)
-        d_w = W * t._anim_scale_x / 100.0   # 純 scale、不含 skew 的顯示寬（anchor 公式用）
-        d_h = H * t._anim_scale_y / 100.0
+        d_w = W * scale_x0 / 100.0   # 純 scale、不含 skew 的顯示寬（anchor 公式用）
+        d_h = H * scale_y0 / 100.0
 
         # ── pivot 取 overlay 實際把手的 scene 座標 ──────────────────────────────
         # 必須用 overlay 的真實把手，不能用代數公式——有 skew 時兩者不一致，
@@ -880,8 +3501,10 @@ class _SelectionOverlay(QGraphicsItem):
         # _drag_d_w0 / h0 = overlay bounding-box 尺寸（含 skew 效果）
         # 用於 _do_scale 的比例縮放：確保拖曳起始時 delta = d_w0，scale 不變
         self._drag_R           = R
-        self._drag_W           = W    # 文字 bounding rect 原始寬（anchor 公式用）
+        self._drag_W           = W    # scale_geom() 原始寬（anchor 公式用）
         self._drag_H           = H
+        self._drag_scale_x0    = scale_x0   # 拖曳起始的縮放百分比（型別語意由子類決定）
+        self._drag_scale_y0    = scale_y0
         self._drag_d_w0        = abs(self._rect.width())
         self._drag_d_h0        = abs(self._rect.height())
         self._drag_pivot_scene = pivot_scene
@@ -930,20 +3553,17 @@ class _SelectionOverlay(QGraphicsItem):
 
         # 換算成 scale %：比例縮放，以 drag-start 的 overlay 尺寸為基準
         # new_sx = start_sx * (new_d_w / overlay_w0)，確保起始幀 scale 不變
-        start_sx = self._drag_start_vals["Anim scale X"]
-        start_sy = self._drag_start_vals["Anim scale Y"]
+        start_sx = self._drag_scale_x0
+        start_sy = self._drag_scale_y0
         raw_sx = start_sx * new_d_w / self._drag_d_w0
         raw_sy = start_sy * new_d_h / self._drag_d_h0
-        new_sx = int(round(max(-2048.0, min(2048.0, raw_sx))))
-        new_sy = int(round(max(-2048.0, min(2048.0, raw_sy))))
-        if new_sx == 0:
-            new_sx = 1 if raw_sx >= 0 else -1
-        if new_sy == 0:
-            new_sy = 1 if raw_sy >= 0 else -1
 
-        # 實際夾合後的顯示尺寸（用於計算新 anchor）
-        act_d_w = self._drag_W * new_sx / 100.0
-        act_d_h = self._drag_H * new_sy / 100.0
+        # 先問子類「實際會套用的夾合後百分比」，錨點才會跟實際套用的尺寸一致
+        # （避免拖到欄位範圍上限時，錨點以未夾合的尺寸計算而跟畫面實際大小對不上）
+        clamp_sx, clamp_sy = self._target.clamp_scale_pct(
+            raw_sx, raw_sy, self._drag_W, self._drag_H)
+        act_d_w = self._drag_W * clamp_sx / 100.0
+        act_d_h = self._drag_H * clamp_sy / 100.0
 
         # 根據 pivot 固定，反求新 anchor (X, Y)
         cos_r2, sin_r2 = math.cos(R), math.sin(R)
@@ -951,17 +3571,10 @@ class _SelectionOverlay(QGraphicsItem):
         new_x = pivot.x() - (px * act_d_w * cos_r2 - py * act_d_h * sin_r2)
         new_y = pivot.y() - (px * act_d_w * sin_r2 + py * act_d_h * cos_r2)
 
-        new_x = int(round(max(-1280.0, min(1280.0, new_x))))
-        new_y = int(round(max(-1280.0, min(1280.0, new_y))))
-
-        self._target.apply_attr("Anim scale X", new_sx)
-        self._target.apply_attr("Anim scale Y", new_sy)
-        self._target.apply_attr("X", new_x)
-        self._target.apply_attr("Y", new_y)
-        self._push_live("Anim scale X", new_sx)
-        self._push_live("Anim scale Y", new_sy)
-        self._push_live("X", new_x)
-        self._push_live("Y", new_y)
+        result = self._target.apply_drag_scale(
+            clamp_sx, clamp_sy, new_x, new_y, self._drag_W, self._drag_H)
+        for field, val in result.items():
+            self._push_live(field, val)
         self._update_geometry()
 
     def _push_live(self, field: str, value) -> None:
